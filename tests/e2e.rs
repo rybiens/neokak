@@ -197,3 +197,64 @@ fn untitled_info_floats_above_the_cursor() {
     assert!(screen.lines().nth(cursor_row).unwrap().contains("line 20"), "cursor line stays visible");
     quit(nk, &sandbox);
 }
+
+/// Column of the first `│` on a screen row (pane or explorer separator).
+fn separator_col(screen: &str, row: usize) -> Option<usize> {
+    screen.lines().nth(row)?.chars().position(|c| c == '│')
+}
+
+/// SGR mouse report (1-based coordinates), as terminals send them.
+fn mouse(kind: u8, col: u16, row: u16, release: bool) -> String {
+    format!("\x1b[<{kind};{};{}{}", col + 1, row + 1, if release { 'm' } else { 'M' })
+}
+
+#[test]
+fn splits_resize_by_keyboard_and_mouse() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(" |");
+    let screen = nk.wait_for("two panes", |t| t.matches("hello from neokak").count() == 2);
+    let start = separator_col(&screen, 5).expect("separator");
+    // 109 columns besides the separator; the first pane gets the odd one.
+    assert_eq!(start, Neokak::COLS as usize / 2);
+
+    // The new right pane has focus, so growing it moves the separator left.
+    nk.send("\x1b[1;5C"); // Ctrl+Right
+    nk.wait_for("right pane wider", |t| separator_col(t, 5) == Some(start - 2));
+    nk.send(" w=");
+    nk.wait_for("equal again", |t| separator_col(t, 5) == Some(start));
+
+    // Drag the separator to column 30.
+    let row = 5;
+    nk.send(&mouse(0, start as u16, row, false));
+    nk.send(&mouse(32, 30, row, false));
+    nk.send(&mouse(0, 30, row, true));
+    nk.wait_for("separator dragged", |t| separator_col(t, 5) == Some(30));
+    nk.send(" wq");
+    nk.wait_for("one pane", |t| t.matches("hello from neokak").count() == 1);
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn explorer_width_changes() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(" e");
+    let screen = nk.wait_for("explorer", |t| t.contains("File Explorer") && t.contains("other.txt"));
+    let edge = separator_col(&screen, 3).expect("explorer edge");
+    assert_eq!(edge, 31, "default width 32");
+    nk.send(">>");
+    nk.wait_for("wider explorer", |t| separator_col(t, 3) == Some(35));
+    // Drag its edge.
+    nk.send(&mouse(0, 35, 3, false));
+    nk.send(&mouse(32, 20, 3, false));
+    nk.send(&mouse(0, 20, 3, true));
+    nk.wait_for("dragged edge", |t| separator_col(t, 3) == Some(20));
+    quit(nk, &sandbox);
+}

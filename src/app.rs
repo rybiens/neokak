@@ -18,7 +18,7 @@ use crate::event::{AppEvent, Tx};
 use crate::kak::client::KakClient;
 use crate::kak::session;
 use crate::keys;
-use crate::pane::{self, Dir, Pane, PaneId, Split};
+use crate::pane::{self, Dir, Pane, PaneId, Separator, Split};
 use crate::recent::Recent;
 use crate::ui::dashboard::{self, DashAction};
 use crate::ui::draw::put;
@@ -70,6 +70,17 @@ impl Layout {
     }
 }
 
+/// A mouse drag in progress that resizes part of the layout.
+enum Dragging {
+    Separator(Separator),
+    TreeEdge,
+}
+
+/// Explorer width limits (the layout also caps it at half the screen).
+const TREE_MIN_WIDTH: u16 = 12;
+/// Cells added or removed per resize step.
+const RESIZE_STEP: i32 = 2;
+
 /// How to start more clients of the session for splits.
 pub struct SessionInfo {
     pub name: String,
@@ -89,7 +100,8 @@ pub struct App {
     focus: PaneId,
     next_id: PaneId,
     pane_rects: Vec<(PaneId, Rect)>,
-    separators: Vec<(Dir, Rect)>,
+    separators: Vec<Separator>,
+    dragging: Option<Dragging>,
 
     buffers: Vec<String>,
     current_file: Option<PathBuf>,
@@ -125,6 +137,7 @@ impl App {
             next_id: 1,
             pane_rects: Vec::new(),
             separators: Vec::new(),
+            dragging: None,
             buffers: Vec::new(),
             current_file: None,
             branch: git_branch(),
@@ -314,6 +327,11 @@ impl App {
                     session::eval_in_client(&self.session.name, &c, "quit");
                 }
             }
+            "equalize" => {
+                self.split.equalize();
+                self.relayout(self.screen);
+            }
+            c if c.starts_with("resize-") => self.resize(&c["resize-".len()..]),
             "next" => {
                 let ids = self.split.ids();
                 let i = ids.iter().position(|&i| i == self.focus).unwrap_or(0);
@@ -335,6 +353,35 @@ impl App {
                 }
                 None => self.notify("error", &format!("unknown window command: {c}")),
             },
+        }
+    }
+
+    /// `resize-left/right/up/down`: like Ctrl+arrows in LazyVim, change the
+    /// focused pane's (or the explorer's) width and height.
+    fn resize(&mut self, which: &str) {
+        let (dir, delta) = match which {
+            "right" => (Dir::Vertical, RESIZE_STEP),
+            "left" => (Dir::Vertical, -RESIZE_STEP),
+            "up" => (Dir::Horizontal, RESIZE_STEP),
+            "down" => (Dir::Horizontal, -RESIZE_STEP),
+            other => return self.notify("error", &format!("unknown resize direction: {other}")),
+        };
+        if self.tree_focused {
+            if dir == Dir::Vertical {
+                self.resize_tree(delta);
+            }
+            return;
+        }
+        if self.split.resize(self.layout.main, self.focus, dir, delta) {
+            self.relayout(self.screen);
+        }
+    }
+
+    fn resize_tree(&mut self, delta: i32) {
+        if let Some(tree) = &mut self.tree {
+            let max = (self.screen.width / 2).max(TREE_MIN_WIDTH);
+            tree.width = (tree.width as i32 + delta).clamp(TREE_MIN_WIDTH as i32, max as i32) as u16;
+            self.relayout(self.screen);
         }
     }
 
@@ -395,6 +442,9 @@ impl App {
             return;
         }
         let pos = Position::new(m.column, m.row);
+        if self.drag(&m, pos) {
+            return;
+        }
         if let (Some(area), Some(tree)) = (self.layout.tree, &mut self.tree)
             && area.contains(pos)
         {
@@ -448,6 +498,46 @@ impl App {
             MouseEventKind::ScrollUp => pane.kak.scroll(-3, line, col),
             MouseEventKind::ScrollDown => pane.kak.scroll(3, line, col),
             _ => {}
+        }
+    }
+
+    /// Starts, continues or ends a drag on a separator or the explorer's
+    /// edge. Returns whether the event was used.
+    fn drag(&mut self, m: &crossterm::event::MouseEvent, pos: Position) -> bool {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(area) = self.layout.tree
+                    && m.column == area.right().saturating_sub(1)
+                    && area.contains(pos)
+                {
+                    self.dragging = Some(Dragging::TreeEdge);
+                    return true;
+                }
+                if let Some(sep) = self.separators.iter().find(|s| s.rect.contains(pos)) {
+                    self.dragging = Some(Dragging::Separator(sep.clone()));
+                    return true;
+                }
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) => match &self.dragging {
+                Some(Dragging::TreeEdge) => {
+                    let x = self.layout.tree.map_or(0, |a| a.x);
+                    let width = (m.column + 1).saturating_sub(x) as i32;
+                    let current = self.tree.as_ref().map_or(0, |t| t.width) as i32;
+                    self.resize_tree(width - current);
+                    true
+                }
+                Some(Dragging::Separator(sep)) => {
+                    let at = if sep.dir == Dir::Vertical { m.column } else { m.row };
+                    let sep = sep.clone();
+                    self.split.drag(self.layout.main, &sep, at);
+                    self.relayout(self.screen);
+                    true
+                }
+                None => false,
+            },
+            MouseEventKind::Up(MouseButton::Left) => self.dragging.take().is_some(),
+            _ => false,
         }
     }
 
@@ -651,6 +741,7 @@ impl App {
                 self.relayout(self.screen);
             }
             TreeAction::Unfocus => self.tree_focused = false,
+            TreeAction::Resize(delta) => self.resize_tree(delta),
             TreeAction::NewFile(dir) => self.input = Some(Input::new(Purpose::NewFile(dir), &root)),
             TreeAction::Rename(p) => self.input = Some(Input::new(Purpose::Rename(p), &root)),
             TreeAction::Delete(p) => self.input = Some(Input::new(Purpose::Delete(p), &root)),
@@ -763,7 +854,7 @@ impl App {
             }
         }
         let multi = self.pane_rects.len() > 1;
-        for (dir, rect) in &self.separators {
+        for Separator { dir, rect, .. } in &self.separators {
             let (glyph, cells) = match dir {
                 Dir::Vertical => ("\u{2502}", rect.height),
                 Dir::Horizontal => ("\u{2500}", rect.width),

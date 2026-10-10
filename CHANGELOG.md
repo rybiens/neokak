@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Resizable panes and explorer: Ctrl+arrows (or `<space>w` then `<`, `>`,
+  `+`, `-`) resize the focused pane or the explorer, `<space>w=` equalizes,
+  and separators and the explorer's edge can be dragged with the mouse.
+  `<` and `>` also resize the explorer while it has focus.
 - Interface themes: `gruvbox`, `gruvbox-light`, `tokyonight`, `catppuccin`,
   `nord` and `onedark`, set with the `neokak_theme` option or switched live
   with `:neokak-theme` and the themes picker (`<space>ft`). Popup

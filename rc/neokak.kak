@@ -141,7 +141,8 @@ define-command neokak-explorer -docstring %{
 
 define-command neokak-window -params 1 -docstring %{
     neokak-window <command>: manage split panes
-    vsplit, split, close, only, next, or h/j/k/l to move focus.
+    vsplit, split, close, only, next, equalize, h/j/k/l to move focus,
+    or resize-left/right/up/down.
 } %{
     neokak-msg window %arg{1}
 }
@@ -195,6 +196,17 @@ map global window l ': neokak-window l<ret>'      -docstring 'focus right'
 map global window w ': neokak-window next<ret>'   -docstring 'next pane'
 map global window q ': neokak-window close<ret>'  -docstring 'close pane'
 map global window o ': neokak-window only<ret>'   -docstring 'close other panes'
+map global window <gt>    ': neokak-window resize-right<ret>' -docstring 'wider'
+map global window <lt>    ': neokak-window resize-left<ret>'  -docstring 'narrower'
+map global window +       ': neokak-window resize-up<ret>'    -docstring 'taller'
+map global window <minus> ': neokak-window resize-down<ret>'  -docstring 'shorter'
+map global window =       ': neokak-window equalize<ret>'     -docstring 'equal sizes'
+
+# Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
+map global normal <c-right> ': neokak-window resize-right<ret>'
+map global normal <c-left>  ': neokak-window resize-left<ret>'
+map global normal <c-up>    ': neokak-window resize-up<ret>'
+map global normal <c-down>  ': neokak-window resize-down<ret>'
 
 # Plugin manager
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾

@@ -36,7 +36,8 @@ model, your kakrc and your Kakoune plugins.
 - **Floating terminal** (toggleterm style) that keeps your shell running when
   hidden
 - **Split panes**: each pane is a separate Kakoune client on the same session,
-  so buffers, registers and LSP are shared
+  so buffers, registers and LSP are shared. Resize panes and the explorer with
+  Ctrl+arrows or by dragging their edges.
 - **Start dashboard** when opened without files
 - **Notification toasts**
 - **Plugin manager** for Kakoune plugins, plus a small kakscript API for adding
@@ -188,14 +189,20 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>wh/j/k/l`          | Move between panes (and into the explorer) |
 | `<space>ww`                | Next pane                            |
 | `<space>wq` / `<space>wo`  | Close pane / close all other panes   |
+| `<c-left>` / `<c-right>`   | Narrower / wider (pane or explorer)  |
+| `<c-down>` / `<c-up>`      | Shorter / taller pane                |
+| `<space>w=`                | Make all panes equal sizes           |
 
 **In a picker:** type to filter. `<c-n>`/`<c-p>` (or arrows) move, `<ret>`
 opens, `<esc>` closes, `<c-u>` clears the query and `<c-w>` deletes a word.
 
 **In the explorer:** `j`/`k` move, `l` or `<ret>` opens a file or expands a
 folder, `h` collapses, `a` creates a file (end the name with `/` for a
-folder), `r` renames, `d` deletes, `H` shows dotfiles, `R` refreshes, `q`
+folder), `r` renames, `d` deletes, `H` shows dotfiles, `R` refreshes, `<` and `>` change its width, `q`
 closes and `<esc>` returns to the editor.
+
+**With the mouse:** drag a separator between panes, or the explorer's right
+edge, to resize.
 
 **In the terminal:** everything goes to the shell except `<c-\>`, which hides
 it. The mouse wheel scrolls back through output.
@@ -348,7 +355,6 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
 ## Roadmap
 
 - Deriving the interface colors from the Kakoune colorscheme automatically
-- Resizable splits and explorer
 - LSP pickers (symbols, references, diagnostics)
 - Git integration beyond status (hunks, blame)
 
