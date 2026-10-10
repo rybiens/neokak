@@ -25,18 +25,25 @@ model, your kakrc and your Kakoune plugins.
 - **Floating command line**, with completion and command help in floats
 - **Completion and hover popups** with rounded borders. Hover docs float just
   above the text they describe.
-- **Themes**: six built-in interface themes with live switching, per-color
-  overrides, and optional transparent popups
+- **Themes**: six built-in interface themes plus one that follows your
+  Kakoune colorscheme, with live switching, per-color overrides, and
+  optional transparent popups
 - **Which-key**: press the leader and a panel lists the available keys
 - **Telescope-style pickers** with fuzzy matching and a preview pane: files,
   live grep (ripgrep), buffers, recent files, colorschemes, themes, plus your
   own
+- **LSP pickers**: document symbols, references, diagnostics, implementations
+  and other kak-lsp result lists open in a picker with a preview
+- **Git**: live change markers in the gutter, hunk navigation, inline blame
+  for the cursor line, a changed-files picker, and lazygit (or any tool) in a
+  floating terminal
 - **File explorer** (neo-tree style) with git status, plus create, rename and
   delete
 - **Floating terminal** (toggleterm style) that keeps your shell running when
   hidden
 - **Split panes**: each pane is a separate Kakoune client on the same session,
-  so buffers, registers and LSP are shared
+  so buffers, registers and LSP are shared. Resize panes and the explorer with
+  Ctrl+arrows or by dragging their edges.
 - **Start dashboard** when opened without files
 - **Notification toasts**
 - **Plugin manager** for Kakoune plugins, plus a small kakscript API for adding
@@ -55,8 +62,10 @@ Windows is not supported.
 - Rust 1.88 or newer, to build
 - Optional:
   - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for live grep
-  - `git` for the branch in the statusline, git status in the explorer, and
-    the plugin manager
+  - `git` for the branch in the statusline, change markers, blame, git status
+    in the explorer, and the plugin manager
+  - [lazygit](https://github.com/jesseduffield/lazygit) for `<space>gg` (or
+    set `neokak_git_tool` to another program)
   - [kakoune-lsp](https://github.com/kakoune-lsp/kakoune-lsp) (`kak-lsp`) for
     LSP. If your kakrc doesn't load it, neokak loads it when it's installed.
   - A [Nerd Font](https://www.nerdfonts.com) for icons (otherwise run with
@@ -129,6 +138,10 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `neokak_theme`                | `gruvbox` | Interface theme (see [Themes](#themes))        |
 | `neokak_transparent`          | `true`    | Draw popups on the terminal background         |
 | `neokak_theme_colors`         | (empty)   | Per-color theme overrides                      |
+| `neokak_git_signs`            | `true`    | Git change markers in the gutter               |
+| `neokak_git_blame_line`       | `false`   | Show who last changed the cursor line          |
+| `neokak_git_tool`             | `lazygit` | Program `<space>gg` runs                       |
+| `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
 | `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
 
 Set them with `set-option global <option> <value>` in `init.kak`.
@@ -146,7 +159,11 @@ explorer and terminal frame. Text inside the editor keeps your Kakoune
 colorscheme, so pick a theme that matches it.
 
 Built-in themes: `gruvbox` (default), `gruvbox-light`, `tokyonight`,
-`catppuccin`, `nord` and `onedark`.
+`catppuccin`, `nord` and `onedark`. There's also `kakoune`, which takes its
+colors from your Kakoune colorscheme and follows it when it changes: function
+names become the accent color, keywords, strings and types the other accents,
+comments the dim text, and the menu and status line faces the popup and bar
+backgrounds. Faces your colorscheme leaves unset keep the gruvbox color.
 
 ```kak
 # In ~/.config/neokak/init.kak
@@ -180,6 +197,14 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>fb` / `<space>fr`  | Buffers / recent files               |
 | `<space>fc` / `<space>ft`  | Kakoune colorschemes / neokak themes |
 | `<space>fp`                | List of all pickers                  |
+| `<space>ss` / `<space>sS`  | Document symbols / workspace symbols |
+| `<space>sr` / `<space>sd`  | References / diagnostics             |
+| `<space>si` / `<space>st`  | Implementations / type definitions   |
+| `<space>gg`                | lazygit in a floating terminal       |
+| `<space>gs`                | Changed files                        |
+| `<space>gn` / `<space>gp`  | Next / previous change               |
+| `<space>gb` / `<space>gB`  | Toggle line blame / blame whole file |
+| `<space>gd`                | Diff of the current file             |
 | `<space>bn` / `<space>bp`  | Next / previous buffer               |
 | `<space>bd` / `<space>bD`  | Delete buffer / delete without saving |
 | `<space>e`                 | File explorer: open, focus, or close if focused |
@@ -188,14 +213,26 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>wh/j/k/l`          | Move between panes (and into the explorer) |
 | `<space>ww`                | Next pane                            |
 | `<space>wq` / `<space>wo`  | Close pane / close all other panes   |
+| `<c-left>` / `<c-right>`   | Narrower / wider (pane or explorer)  |
+| `<c-down>` / `<c-up>`      | Shorter / taller pane                |
+| `<space>w=`                | Make all panes equal sizes           |
 
 **In a picker:** type to filter. `<c-n>`/`<c-p>` (or arrows) move, `<ret>`
 opens, `<esc>` closes, `<c-u>` clears the query and `<c-w>` deletes a word.
 
 **In the explorer:** `j`/`k` move, `l` or `<ret>` opens a file or expands a
 folder, `h` collapses, `a` creates a file (end the name with `/` for a
-folder), `r` renames, `d` deletes, `H` shows dotfiles, `R` refreshes, `q`
-closes and `<esc>` returns to the editor.
+folder), `r` renames, `d` deletes, `H` shows dotfiles, `R` refreshes, `<` and `>` change its width, `q` or
+`<space>e` hides it, and `<esc>` returns to the editor while leaving it open.
+Leader mappings (`<space>…`) work from the explorer too.
+
+**Which part has focus:** the statusline's mode pill reads `EXPLORER` or
+`TERMINAL` when those have focus, the explorer's header lights up when it
+does, and with split panes each pane has a title bar with its buffer name,
+highlighted for the focused one.
+
+**With the mouse:** drag a separator between panes, or the explorer's right
+edge, to resize.
 
 **In the terminal:** everything goes to the shell except `<c-\>`, which hides
 it. The mouse wheel scrolls back through output.
@@ -242,6 +279,9 @@ neokak-notify [<level>] <message>
 
 # Switch the interface theme.
 neokak-theme <name>
+
+# Run a program in a floating terminal until it exits.
+neokak-float <program> [<args>...]
 
 # Explorer and panes, as used by the default mappings.
 neokak-explorer
@@ -347,10 +387,9 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
 
 ## Roadmap
 
-- Deriving the interface colors from the Kakoune colorscheme automatically
-- Resizable splits and explorer
-- LSP pickers (symbols, references, diagnostics)
-- Git integration beyond status (hunks, blame)
+- Live workspace-symbol search (results update as you type)
+- Staging and resetting individual git hunks
+- Restoring the last session's buffers and layout
 
 ## License
 

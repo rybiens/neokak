@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- Fixed: quitting neokak (or closing its terminal) killed Kakoune while its
+  shutdown hooks were running, which left kak-lsp and its language servers
+  running after neokak exited. With rust-analyzer that leaked hundreds of MB
+  per session. neokak now restores the terminal and lets Kakoune finish.
+  This includes closing the terminal window (e.g. with a window manager
+  keybind): Kakoune now runs in its own process group, so the terminal's
+  hangup signal reaches neokak, which shuts Kakoune down cleanly.
+- Clearer focus: the statusline shows `EXPLORER` or `TERMINAL` when those
+  have focus, the explorer header and the bufferline's active marker
+  highlight only while focused, and split panes get a title bar each, with
+  the focused one highlighted.
+- Fixed: leader mappings, including `<space>e` to hide the explorer, didn't
+  work while the explorer had focus.
+- A `kakoune` theme that takes the interface colors from the Kakoune
+  colorscheme and updates when it changes.
+- Git integration: change markers in the gutter that update as you type
+  (using Kakoune's git tool), `<space>gn`/`<space>gp` to jump between
+  changes, inline blame for the cursor line (`<space>gb`), a changed-files
+  picker (`<space>gs`), whole-file blame and diff, and lazygit in a floating
+  terminal (`<space>gg`, configurable with `neokak_git_tool`).
+- `neokak-float <program>` runs any program in a floating terminal until it
+  exits.
+- LSP pickers: kak-lsp's result lists (document and workspace symbols,
+  references, diagnostics, implementations, call hierarchy) open in a
+  picker with a preview instead of a buffer. New `<space>s` mappings:
+  `ss` symbols, `sS` workspace symbols, `sr` references, `sd` diagnostics,
+  `si` implementations, `st` type definitions. Set
+  `neokak_lsp_pickers false` for kak-lsp's buffers.
+- Resizable panes and explorer: Ctrl+arrows (or `<space>w` then `<`, `>`,
+  `+`, `-`) resize the focused pane or the explorer, `<space>w=` equalizes,
+  and separators and the explorer's edge can be dragged with the mouse.
+  `<` and `>` also resize the explorer while it has focus.
 - Interface themes: `gruvbox`, `gruvbox-light`, `tokyonight`, `catppuccin`,
   `nord` and `onedark`, set with the `neokak_theme` option or switched live
   with `:neokak-theme` and the themes picker (`<space>ft`). Popup

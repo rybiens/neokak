@@ -184,6 +184,15 @@ impl Neokak {
         self.send("\x1b");
     }
 
+    /// Sends SIGHUP to neokak's whole process group, as a terminal does when
+    /// its window is closed.
+    pub fn hangup(&self) {
+        let pid = self.child.process_id().expect("pid");
+        // The pty made neokak a session leader, so its group id is its pid.
+        let ok = Command::new("kill").args(["-HUP", "--", &format!("-{pid}")]).status().unwrap().success();
+        assert!(ok, "kill -HUP failed");
+    }
+
     /// Waits for the process to exit and returns whether it succeeded.
     pub fn wait_exit(&mut self) -> bool {
         let deadline = Instant::now() + TIMEOUT;

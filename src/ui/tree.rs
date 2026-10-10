@@ -29,6 +29,8 @@ pub enum TreeAction {
     NewFile(PathBuf),
     Rename(PathBuf),
     Delete(PathBuf),
+    /// Change the explorer's width by this many cells.
+    Resize(i32),
 }
 
 pub struct Tree {
@@ -184,6 +186,8 @@ impl Tree {
                     self.move_by(-10);
                     TreeAction::None
                 }
+                KeyCode::Left => TreeAction::Resize(-2),
+                KeyCode::Right => TreeAction::Resize(2),
                 _ => TreeAction::None,
             };
         }
@@ -207,6 +211,8 @@ impl Tree {
                 return self.selected_path().map_or(TreeAction::None, |p| TreeAction::Delete(p.into()));
             }
             KeyCode::Char('q') => return TreeAction::Close,
+            KeyCode::Char('<') => return TreeAction::Resize(-2),
+            KeyCode::Char('>') => return TreeAction::Resize(2),
             KeyCode::Esc | KeyCode::Tab => return TreeAction::Unfocus,
             _ => {}
         }
@@ -360,6 +366,9 @@ mod tests {
             _ => panic!("expected Delete"),
         }
         assert!(matches!(t.handle_key(&key(KeyCode::Char('q'))), TreeAction::Close));
+        assert!(matches!(t.handle_key(&key(KeyCode::Char('>'))), TreeAction::Resize(2)));
+        let ctrl_left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
+        assert!(matches!(t.handle_key(&ctrl_left), TreeAction::Resize(-2)));
         assert!(matches!(t.handle_key(&key(KeyCode::Esc)), TreeAction::Unfocus));
     }
 

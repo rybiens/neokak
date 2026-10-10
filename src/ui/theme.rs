@@ -31,7 +31,7 @@ pub struct Theme {
 }
 
 /// Built-in theme names, in picker order.
-pub const THEMES: &[&str] = &["gruvbox", "gruvbox-light", "tokyonight", "catppuccin", "nord", "onedark"];
+pub const THEMES: &[&str] = &["gruvbox", "gruvbox-light", "tokyonight", "catppuccin", "nord", "onedark", "kakoune"];
 
 /// Colors a user can override, as `name=color`.
 pub const COLOR_NAMES: &[&str] = &[
@@ -122,6 +122,47 @@ impl Theme {
         })
     }
 
+    /// A theme following the Kakoune colorscheme, from the faces in the
+    /// modeline probe. Faces the colorscheme leaves at "default" keep the
+    /// gruvbox color.
+    pub fn from_kakoune(probe: &[(char, Face)]) -> Self {
+        let face = |c: char| probe.iter().find(|(k, _)| *k == c).map(|(_, f)| f);
+        let color = |s: &str| (s != "default" && !s.is_empty()).then(|| parse_color(s)).flatten();
+        let fg = |c| face(c).and_then(|f| color(&f.fg));
+        let bg = |c| face(c).and_then(|f| color(&f.bg));
+        let mut t = Self::named("gruvbox").unwrap();
+        let set = |slot: &mut Color, value: Option<Color>| {
+            if let Some(v) = value {
+                *slot = v;
+            }
+        };
+        set(&mut t.fg, fg('D').or(fg('S')));
+        set(&mut t.bg_bar, bg('S'));
+        set(&mut t.bg_float, bg('M'));
+        set(&mut t.bg_alt, bg('M').or(bg('S')));
+        set(&mut t.bg_sel, bg('F'));
+        set(&mut t.fg_dim, fg('c').or(fg('L')));
+        set(&mut t.border, fg('L').or(fg('P')).or(fg('c')));
+        set(&mut t.blue, fg('f'));
+        set(&mut t.purple, fg('k'));
+        set(&mut t.green, fg('s'));
+        set(&mut t.yellow, fg('t'));
+        set(&mut t.orange, fg('v'));
+        set(&mut t.aqua, fg('m'));
+        // Error is often black on red; take whichever side is the color.
+        let error = face('E').and_then(|f| match (color(&f.fg), color(&f.bg)) {
+            (Some(Color::Black) | None, Some(b)) => Some(b),
+            (f, _) => f,
+        });
+        set(&mut t.red, error);
+        t.dark = match t.fg {
+            Color::Rgb(r, g, b) => 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32 > 128.0,
+            Color::Black | Color::DarkGray => false,
+            _ => true,
+        };
+        t
+    }
+
     /// Draws popups on the terminal background instead of a solid color.
     pub fn transparent(mut self, on: bool) -> Self {
         if on {
@@ -157,9 +198,18 @@ impl Theme {
     /// Builds a theme from neokak's options: the theme name, transparency,
     /// and `name=color` overrides. Errors name every bad setting; the theme
     /// is still built from the valid ones.
-    pub fn from_settings(name: &str, transparent: bool, overrides: &[String]) -> (Self, Vec<String>) {
+    pub fn from_settings(
+        name: &str,
+        transparent: bool,
+        overrides: &[String],
+        probe: &[(char, Face)],
+    ) -> (Self, Vec<String>) {
         let mut errors = Vec::new();
-        let base = Self::named(name).unwrap_or_else(|| {
+        let base = match name {
+            "kakoune" => Some(Self::from_kakoune(probe)),
+            _ => Self::named(name),
+        };
+        let base = base.unwrap_or_else(|| {
             errors.push(format!("unknown theme {name:?} (one of: {})", THEMES.join(", ")));
             Self::named("gruvbox").unwrap()
         });
@@ -289,7 +339,7 @@ mod tests {
 
     #[test]
     fn every_theme_builds() {
-        for name in THEMES {
+        for name in THEMES.iter().filter(|n| **n != "kakoune") {
             let t = Theme::named(name).unwrap_or_else(|| panic!("{name} missing"));
             assert_ne!(t.bg_float, Color::Reset, "{name}: solid popups unless transparent");
             assert_eq!(t.clone().transparent(true).bg_float, Color::Reset);
@@ -301,15 +351,35 @@ mod tests {
     #[test]
     fn settings_apply_overrides_and_report_errors() {
         let overrides = ["blue=#7aa2f7", "bg_sel=rgb:3b4261", "pink=#ff00ff", "fg=notacolor", "junk"].map(String::from);
-        let (t, errors) = Theme::from_settings("tokyonight", false, &overrides);
+        let (t, errors) = Theme::from_settings("tokyonight", false, &overrides, &[]);
         assert_eq!(t.blue, Color::Rgb(0x7a, 0xa2, 0xf7));
         assert_eq!(t.bg_sel, Color::Rgb(0x3b, 0x42, 0x61));
         assert_eq!(t.bg_float, Theme::named("tokyonight").unwrap().bg_float, "not transparent");
         assert_eq!(errors.len(), 3, "{errors:?}");
 
-        let (t, errors) = Theme::from_settings("nope", true, &[]);
+        let (t, errors) = Theme::from_settings("nope", true, &[], &[]);
         assert_eq!(t, Theme::default(), "unknown names fall back to transparent gruvbox");
         assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn kakoune_theme_follows_the_probe() {
+        let probe = [
+            ('f', face("rgb:112233", "default", &[])),
+            ('S', face("rgb:eeeeee", "rgb:202020", &[])),
+            ('E', face("black", "red", &[])),
+            ('k', face("default", "default", &[])),
+        ];
+        let t = Theme::from_kakoune(&probe);
+        assert_eq!(t.blue, Color::Rgb(0x11, 0x22, 0x33));
+        assert_eq!(t.bg_bar, Color::Rgb(0x20, 0x20, 0x20));
+        assert_eq!(t.fg, Color::Rgb(0xee, 0xee, 0xee));
+        assert_eq!(t.red, Color::Red, "takes the colored side of black-on-red");
+        assert_eq!(t.purple, Theme::named("gruvbox").unwrap().purple, "default faces keep gruvbox");
+        assert!(t.dark);
+        let (from_settings, errors) = Theme::from_settings("kakoune", false, &[], &probe);
+        assert!(errors.is_empty());
+        assert_eq!(from_settings, t);
     }
 
     #[test]

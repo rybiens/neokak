@@ -166,7 +166,8 @@ fn run_in(dir: &std::path::Path, opts: Options) -> Result<()> {
     // Terminal's Drop restores the cursor itself and eprintln!s on failure,
     // which panics once the tty is gone; we've already restored everything.
     std::mem::forget(terminal);
-    result
+    // Now that the terminal is back, wait for Kakoune to finish shutting down.
+    result.map(drop)
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {

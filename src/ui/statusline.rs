@@ -57,6 +57,23 @@ impl ModeLine {
     }
 }
 
+/// The colorscheme probe at the end of neokak's modeline: one single-char
+/// atom per face, in the face's resolved colors (see rc/neokak.kak).
+pub fn face_probe(line: &Line) -> Vec<(char, Face)> {
+    let mut seps = 0;
+    let mut out = Vec::new();
+    for atom in line {
+        if seps >= 10 {
+            let mut chars = atom.contents.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                out.push((c, atom.face.clone()));
+            }
+        }
+        seps += atom.contents.matches(SEP).count();
+    }
+    out
+}
+
 pub fn mode_label(mode: &str) -> String {
     match mode {
         "prompt" => "COMMAND".into(),
@@ -76,6 +93,9 @@ pub fn mode_label(mode: &str) -> String {
 pub struct StatusContext<'a> {
     pub mode_line: &'a Line,
     pub branch: Option<&'a str>,
+    /// What has focus when it isn't the editor (`EXPLORER`, `TERMINAL`);
+    /// replaces the mode in the pill.
+    pub focus: Option<&'a str>,
 }
 
 pub fn render(buf: &mut Buffer, area: Rect, ctx: &StatusContext, theme: &Theme, icons: &Icons) {
@@ -88,13 +108,16 @@ pub fn render(buf: &mut Buffer, area: Rect, ctx: &StatusContext, theme: &Theme, 
         return;
     };
 
-    let accent = theme.mode_color(&ml.mode);
+    let (label, accent) = match ctx.focus {
+        Some(what) => (what.to_uppercase(), theme.aqua),
+        None => (mode_label(&ml.mode), theme.mode_color(&ml.mode)),
+    };
     let a = Style::new().fg(theme.bg_bar).bg(accent).add_modifier(Modifier::BOLD);
     let b = Style::new().fg(theme.fg).bg(theme.bg_alt);
     let sep_a = Style::new().fg(accent).bg(theme.bg_alt);
     let sep_b = Style::new().fg(theme.bg_alt).bg(theme.bg_bar);
 
-    let mut left: Vec<Seg> = vec![(format!(" {} ", mode_label(&ml.mode)), a), (icons.sep_left().into(), sep_a)];
+    let mut left: Vec<Seg> = vec![(format!(" {label} "), a), (icons.sep_left().into(), sep_a)];
     match ctx.branch {
         Some(branch) => left.push((format!(" {}{branch} ", icons.branch()), b)),
         None => left.push((" ".into(), b)),
@@ -177,7 +200,7 @@ mod tests {
     fn render_text(mode_line: &Line, branch: Option<&str>) -> String {
         let area = Rect::new(0, 0, 100, 1);
         let mut buf = Buffer::empty(area);
-        let ctx = StatusContext { mode_line, branch };
+        let ctx = StatusContext { mode_line, branch, focus: None };
         render(&mut buf, area, &ctx, &Theme::default(), &Icons { nerd: false });
         crate::ui::draw::rows(&buf).join("")
     }
@@ -199,9 +222,35 @@ mod tests {
     }
 
     #[test]
+    fn shows_what_has_focus() {
+        let ml = line("normal␞a.txt␞false␞1␞1␞1␞␞1 sel␞0␞0");
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        let ctx = StatusContext { mode_line: &ml, branch: None, focus: Some("explorer") };
+        render(&mut buf, area, &ctx, &Theme::default(), &Icons { nerd: false });
+        let text = crate::ui::draw::rows(&buf).join("");
+        assert!(text.contains(" EXPLORER ") && !text.contains("NORMAL"), "{text}");
+    }
+
+    #[test]
     fn falls_back_to_raw_modeline() {
         let text = render_text(&line("custom modeline 1:1"), None);
         assert!(text.contains("custom modeline 1:1"));
+    }
+
+    #[test]
+    fn reads_the_face_probe() {
+        let atom = |s: &str, fg: &str| Atom { face: Face { fg: fg.into(), ..Face::default() }, contents: s.into() };
+        let line = vec![
+            atom("normal␞a␞false␞1␞1␞1␞rust␞1 sel␞0␞0␞", "default"),
+            atom("f", "rgb:83a598"),
+            atom("c", "rgb:928374"),
+        ];
+        let probe = face_probe(&line);
+        assert_eq!(probe.len(), 2);
+        assert_eq!((probe[0].0, probe[0].1.fg.as_str()), ('f', "rgb:83a598"));
+        assert!(face_probe(&self::line("normal␞a")).is_empty());
+        assert!(ModeLine::parse(&line).is_some(), "the probe doesn't break field parsing");
     }
 
     #[test]

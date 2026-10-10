@@ -34,6 +34,23 @@ pub enum Accept {
     Picker,
     /// Run this Kakoune command with the item as its argument.
     Command(String),
+    /// Item is `label<TAB>path:line:col` (see [`location`]): only the label
+    /// is shown and matched; choosing it opens the location.
+    Location,
+}
+
+/// Builds an [`Accept::Location`] item.
+pub fn location(label: &str, path: &str, line: usize, col: usize) -> String {
+    format!("{}\t{path}:{line}:{col}", label.replace('\t', " "))
+}
+
+/// Splits an [`Accept::Location`] item into label and (path, line, column).
+pub fn parse_location(item: &str) -> Option<(&str, (&str, usize, usize))> {
+    let (label, target) = item.split_once('\t')?;
+    let mut parts = target.rsplitn(3, ':');
+    let col = parts.next()?.parse().ok()?;
+    let line = parts.next()?.parse().ok()?;
+    Some((label, (parts.next()?, line, col)))
 }
 
 pub enum Action {
@@ -98,7 +115,15 @@ impl Picker {
     /// A picker over a fixed list of items.
     pub fn list(title: &str, items: Vec<String>, accept: Accept, tx: Tx) -> Self {
         let nucleo = Self::fuzzy(&tx);
-        Self::push(&nucleo, items);
+        if matches!(accept, Accept::Location) {
+            // Match on the label only, not the hidden target.
+            let injector = nucleo.injector();
+            for item in items {
+                injector.push(item, |s, cols| cols[0] = s.split('\t').next().unwrap_or(s).into());
+            }
+        } else {
+            Self::push(&nucleo, items);
+        }
         Self::new(title, Source::Fuzzy(nucleo), accept, tx)
     }
 
@@ -263,23 +288,50 @@ impl Picker {
                 Some((path, line, col, _)) => Action::Eval(format!("edit -- {} {line} {col}", quote(path))),
                 None => Action::None,
             },
+            Accept::Location => match parse_location(&item) {
+                Some((_, (path, line, col))) => Action::Eval(format!("edit -- {} {line} {col}", quote(path))),
+                None => Action::None,
+            },
+        }
+    }
+
+    /// The part of an item the fuzzy matcher sees.
+    fn match_text<'a>(&self, item: &'a str) -> &'a str {
+        match self.accept {
+            Accept::Location => parse_location(item).map_or(item, |(label, _)| label),
+            _ => item,
+        }
+    }
+
+    /// The file an item refers to, for its icon and preview.
+    fn item_path<'a>(&self, item: &'a str) -> Option<&'a str> {
+        match self.accept {
+            Accept::Edit | Accept::Buffer => Some(item),
+            Accept::GrepHit => parse_grep(item).map(|g| g.0),
+            Accept::Location => parse_location(item).map(|(_, (p, _, _))| p),
+            _ => None,
         }
     }
 
     /// Display form of an item: paths shortened relative to cwd or home.
     fn display<'a>(&self, item: &'a str) -> std::borrow::Cow<'a, str> {
         if !matches!(self.accept, Accept::Edit) {
-            return item.into();
+            return self.match_text(item).into();
         }
-        if let Some(rest) = item.strip_prefix(&self.cwd).and_then(|r| r.strip_prefix('/')) {
+        self.short_path(item)
+    }
+
+    /// A path relative to the working directory, or with `~` for home.
+    fn short_path<'a>(&self, path: &'a str) -> std::borrow::Cow<'a, str> {
+        if let Some(rest) = path.strip_prefix(&self.cwd).and_then(|r| r.strip_prefix('/')) {
             return rest.into();
         }
         if !self.home.is_empty()
-            && let Some(rest) = item.strip_prefix(&self.home)
+            && let Some(rest) = path.strip_prefix(&self.home)
         {
             return format!("~{rest}").into();
         }
-        item.into()
+        path.into()
     }
 
     /// The file to preview for the selected item, and the line to center.
@@ -289,6 +341,10 @@ impl Picker {
             Accept::Edit | Accept::Buffer => (item, 1),
             Accept::GrepHit => {
                 let (p, l, _, _) = parse_grep(&item)?;
+                (p.to_owned(), l)
+            }
+            Accept::Location => {
+                let (_, (p, l, _)) = parse_location(&item)?;
                 (p.to_owned(), l)
             }
             _ => return None,
@@ -302,7 +358,8 @@ impl Picker {
         let w = (screen.width * 9 / 10).min(160);
         let h = (screen.height * 8 / 10).max(8.min(screen.height));
         let outer = Rect::new(screen.x + (screen.width - w) / 2, screen.y + (screen.height - h) / 2, w, h);
-        let show_preview = w >= 90 && matches!(self.accept, Accept::Edit | Accept::Buffer | Accept::GrepHit);
+        let show_preview =
+            w >= 90 && matches!(self.accept, Accept::Edit | Accept::Buffer | Accept::GrepHit | Accept::Location);
         let list_w = if show_preview { w / 2 } else { w };
         let prompt_area = Rect::new(outer.x, outer.y, list_w, 3);
         let results_area = Rect::new(outer.x, outer.y + 3, list_w, h.saturating_sub(3));
@@ -342,24 +399,21 @@ impl Picker {
             buf.set_style(Rect::new(inner.x, y, inner.width, 1), base);
             let caret = if selected { "\u{258c}" } else { " " };
             let mut x = put(buf, inner.x, y, inner.right(), caret, base.fg(theme.blue));
-            if matches!(self.accept, Accept::Edit | Accept::Buffer | Accept::GrepHit) {
-                let path = match self.accept {
-                    Accept::GrepHit => parse_grep(&item).map_or("", |g| g.0),
-                    _ => &item,
-                };
+            if let Some(path) = self.item_path(&item) {
                 x = put(buf, x, y, inner.right(), icons.file(path), base.fg(theme.blue));
             }
 
             // Highlight matched characters.
             indices.clear();
             if let Some(p) = &pattern {
-                let hay = Utf32Str::new(&item, &mut utf32);
+                let hay = Utf32Str::new(self.match_text(&item), &mut utf32);
                 p.indices(hay, &mut self.matcher, &mut indices);
                 indices.sort_unstable();
                 indices.dedup();
             }
             let shown = self.display(&item);
-            let offset = item.chars().count() as isize - shown.chars().count() as isize;
+            // `display` may drop a prefix of the matched text (shortened paths).
+            let offset = self.match_text(&item).chars().count() as isize - shown.chars().count() as isize;
             let hl = base.fg(theme.orange).add_modifier(Modifier::BOLD);
             let mut matches = indices.iter().map(|&i| i as isize - offset).peekable();
             for (ci, c) in shown.chars().enumerate() {
@@ -381,7 +435,7 @@ impl Picker {
         let target = self.preview_target();
         let title = target
             .as_ref()
-            .map(|(p, _)| self.display(&p.display().to_string()).into_owned())
+            .map(|(p, _)| self.short_path(&p.display().to_string()).into_owned())
             .unwrap_or_else(|| "Preview".into());
         let inner = float(buf, area, &title, theme);
         let Some((path, line)) = target else { return };
@@ -545,6 +599,26 @@ mod tests {
 
         let mut p = list(&["files"], Accept::Picker);
         assert!(matches!(p.handle_key(&special(KeyCode::Enter)), Action::OpenPicker(n) if n == "files"));
+    }
+
+    #[test]
+    fn locations_match_on_the_label_and_open_the_target() {
+        let items = [location("fn render", "/p/src/ui.rs", 40, 5), location("struct Picker", "/p/src/picker.rs", 7, 1)];
+        let mut p = list(&items.iter().map(String::as_str).collect::<Vec<_>>(), Accept::Location);
+        type_query(&mut p, "picker.rs");
+        assert_eq!(p.count().0, 0, "the hidden path isn't matched");
+        p.handle_key(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        type_query(&mut p, "render");
+        assert_eq!(p.count().0, 1);
+        assert_eq!(p.display(&p.item(0).unwrap()), "fn render");
+        assert_eq!(eval(p.handle_key(&special(KeyCode::Enter))), "edit -- '/p/src/ui.rs' 40 5");
+    }
+
+    #[test]
+    fn location_items_round_trip() {
+        let item = location("a\tb", "/x:y/z.rs", 3, 9);
+        assert_eq!(parse_location(&item), Some(("a b", ("/x:y/z.rs", 3, 9))));
+        assert_eq!(parse_location("no tab"), None);
     }
 
     #[test]

@@ -14,11 +14,12 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::{Frame, Terminal};
 
-use crate::event::{AppEvent, Tx};
+use crate::event::{AppEvent, TermSlot, Tx};
 use crate::kak::client::KakClient;
+use crate::kak::rpc::KakEvent;
 use crate::kak::session;
 use crate::keys;
-use crate::pane::{self, Dir, Pane, PaneId, Split};
+use crate::pane::{self, Dir, Pane, PaneId, Separator, Split};
 use crate::recent::Recent;
 use crate::ui::dashboard::{self, DashAction};
 use crate::ui::draw::put;
@@ -70,6 +71,46 @@ impl Layout {
     }
 }
 
+/// The line `git blame` was asked about, and its result once known.
+struct Blame {
+    client: String,
+    file: String,
+    line: usize,
+    text: Option<String>,
+}
+
+/// Progress of a leader sequence started from the explorer.
+#[derive(Clone, Copy, Default)]
+struct Leader {
+    /// Kakoune has reported a pending user mode.
+    seen_pending: bool,
+    /// Keys forwarded after the leader. Kakoune may process a fast sequence
+    /// before drawing, so the pending mode is never seen.
+    keys_after: u32,
+}
+
+/// Kakoune processes still shutting down when neokak's loop ends.
+pub struct Shutdown(Vec<KakClient>);
+
+impl Drop for Shutdown {
+    fn drop(&mut self) {
+        for kak in self.0.drain(..) {
+            kak.finish(Duration::from_secs(3));
+        }
+    }
+}
+
+/// A mouse drag in progress that resizes part of the layout.
+enum Dragging {
+    Separator(Separator),
+    TreeEdge,
+}
+
+/// Explorer width limits (the layout also caps it at half the screen).
+const TREE_MIN_WIDTH: u16 = 12;
+/// Cells added or removed per resize step.
+const RESIZE_STEP: i32 = 2;
+
 /// How to start more clients of the session for splits.
 pub struct SessionInfo {
     pub name: String,
@@ -85,11 +126,19 @@ pub struct App {
     session: SessionInfo,
 
     panes: Vec<Pane>,
+    /// Clients of a session that's ending, to let finish (see [`Shutdown`]).
+    exiting: Vec<KakClient>,
     split: Split,
     focus: PaneId,
     next_id: PaneId,
     pane_rects: Vec<(PaneId, Rect)>,
-    separators: Vec<(Dir, Rect)>,
+    separators: Vec<Separator>,
+    /// Title bars above each pane, when there are splits.
+    winbars: Vec<(PaneId, Rect)>,
+    dragging: Option<Dragging>,
+    /// A leader key typed in the explorer went to Kakoune; the explorer gets
+    /// focus back once Kakoune's user mode is over.
+    tree_leader: Option<Leader>,
 
     buffers: Vec<String>,
     current_file: Option<PathBuf>,
@@ -104,6 +153,14 @@ pub struct App {
     input: Option<Input>,
     term: Option<FloatTerm>,
     term_visible: bool,
+    /// A program running in a float until it exits (lazygit, ...).
+    tool: Option<FloatTerm>,
+    /// The theme options from kak, kept to rebuild the theme when the
+    /// colorscheme (seen through the modeline probe) changes.
+    theme_settings: (String, bool, Vec<String>),
+    face_probe: Vec<(char, crate::kak::rpc::Face)>,
+    /// Inline blame for the focused pane's cursor line.
+    blame: Option<Blame>,
     dashboard: bool,
 
     dirty: bool,
@@ -120,11 +177,15 @@ impl App {
             layout: Layout::default(),
             session,
             panes: vec![Pane::new(0, MAIN_CLIENT.to_owned(), kak)],
+            exiting: Vec::new(),
             split: Split::Leaf(0),
             focus: 0,
             next_id: 1,
             pane_rects: Vec::new(),
             separators: Vec::new(),
+            winbars: Vec::new(),
+            dragging: None,
+            tree_leader: None,
             buffers: Vec::new(),
             current_file: None,
             branch: git_branch(),
@@ -138,13 +199,24 @@ impl App {
             input: None,
             term: None,
             term_visible: false,
+            tool: None,
+            blame: None,
+            theme_settings: ("gruvbox".into(), true, Vec::new()),
+            face_probe: Vec::new(),
             dashboard,
             dirty: true,
             quit: false,
         }
     }
 
-    pub fn run(mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>, rx: Receiver<AppEvent>) -> Result<()> {
+    /// Runs until Kakoune exits or neokak is told to quit. The returned
+    /// [`Shutdown`] waits for Kakoune to finish when dropped; drop it after
+    /// restoring the terminal so quitting doesn't look frozen.
+    pub fn run(
+        mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        rx: Receiver<AppEvent>,
+    ) -> Result<Shutdown> {
         let size = terminal.size()?;
         self.relayout(Rect::new(0, 0, size.width, size.height));
         while !self.quit {
@@ -169,11 +241,13 @@ impl App {
                 self.dirty = false;
             }
         }
-        match self.panes.first_mut() {
-            Some(p) => p.kak.kill_session(),
-            None => session::send_command(&self.session.name, "kill!"),
+        // With panes left, neokak is quitting by itself (signal, tty gone):
+        // end the session. Without, the session is already ending.
+        if let Some(p) = self.panes.first_mut() {
+            p.kak.kill_session();
         }
-        Ok(())
+        self.exiting.extend(self.panes.drain(..).map(|p| p.kak));
+        Ok(Shutdown(std::mem::take(&mut self.exiting)))
     }
 
     fn pane(&self) -> &Pane {
@@ -196,6 +270,16 @@ impl App {
         self.pane_rects.clear();
         self.separators.clear();
         self.split.layout(self.layout.main, &mut self.pane_rects, &mut self.separators);
+        // With splits, each pane gets a title bar showing its buffer.
+        self.winbars.clear();
+        if self.pane_rects.len() > 1 {
+            for (id, rect) in &mut self.pane_rects {
+                if rect.height > 2 {
+                    self.winbars.push((*id, Rect { height: 1, ..*rect }));
+                    *rect = Rect { y: rect.y + 1, height: rect.height - 1, ..*rect };
+                }
+            }
+        }
         for (id, rect) in &self.pane_rects {
             if let Some(p) = self.panes.iter_mut().find(|p| p.id == *id) {
                 p.resize(*rect);
@@ -212,6 +296,26 @@ impl App {
         self.dirty = true;
         match ev {
             AppEvent::Kak(id, ev) => {
+                if let KakEvent::DrawStatus { mode_line, .. } = &ev {
+                    let probe = statusline::face_probe(mode_line);
+                    if !probe.is_empty() && probe != self.face_probe {
+                        self.face_probe = probe;
+                        if self.theme_settings.0 == "kakoune" {
+                            self.rebuild_theme();
+                        }
+                    }
+                }
+                if let (Some(leader), KakEvent::DrawStatus { mode_line, .. }) = (&mut self.tree_leader, &ev)
+                    && id == self.focus
+                    && let Some(ml) = ModeLine::parse(mode_line)
+                {
+                    if ml.mode.starts_with("next-key") {
+                        leader.seen_pending = true;
+                    } else if ml.mode == "normal" && (leader.seen_pending || leader.keys_after > 0) {
+                        self.tree_leader = None;
+                        self.tree_focused = self.tree.is_some();
+                    }
+                }
                 if let Some(p) = self.panes.iter_mut().find(|p| p.id == id) {
                     p.handle_kak(ev);
                 }
@@ -227,14 +331,33 @@ impl App {
             AppEvent::Term(ev) => self.handle_term(ev),
             AppEvent::Ipc(args) => self.handle_ipc(args),
             AppEvent::Wake => {}
-            AppEvent::PtyOutput(bytes) => {
-                if let Some(t) = &mut self.term {
+            AppEvent::PtyOutput(slot, bytes) => {
+                let term = match slot {
+                    TermSlot::Shell => &mut self.term,
+                    TermSlot::Tool => &mut self.tool,
+                };
+                if let Some(t) = term {
                     t.process(&bytes);
                 }
                 // Hidden terminal output doesn't need a frame.
-                self.dirty = self.term_visible;
+                self.dirty = slot == TermSlot::Tool || self.term_visible;
             }
-            AppEvent::PtyExited => {
+            AppEvent::PtyExited(TermSlot::Tool) => {
+                self.tool = None;
+                // The tool may have changed files or git state.
+                if let Some(tree) = &mut self.tree {
+                    tree.refresh();
+                }
+                self.eval("try %{ git update-diff }");
+            }
+            AppEvent::Blame { client, file, line, text } => {
+                if let Some(b) = &mut self.blame
+                    && (b.client.as_str(), b.file.as_str(), b.line) == (client.as_str(), file.as_str(), line)
+                {
+                    b.text = text;
+                }
+            }
+            AppEvent::PtyExited(TermSlot::Shell) => {
                 self.term = None;
                 self.term_visible = false;
             }
@@ -250,15 +373,17 @@ impl App {
         crate::debug!("remove pane {id}");
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let mut pane = self.panes.remove(i);
-        if pane.client == MAIN_CLIENT && !self.panes.is_empty() {
+        if self.panes.is_empty() {
+            // The session is ending; let Kakoune run its KakEnd hooks.
+            self.exiting.push(pane.kak);
+            self.quit = true;
+            return;
+        }
+        if pane.client == MAIN_CLIENT {
             // That process hosts the session server; leave it running.
             pane.kak.detach();
         }
         drop(pane);
-        if self.panes.is_empty() {
-            self.quit = true;
-            return;
-        }
         self.split.remove(id);
         if self.focus == id {
             self.focus = self.split.ids()[0];
@@ -314,6 +439,11 @@ impl App {
                     session::eval_in_client(&self.session.name, &c, "quit");
                 }
             }
+            "equalize" => {
+                self.split.equalize();
+                self.relayout(self.screen);
+            }
+            c if c.starts_with("resize-") => self.resize(&c["resize-".len()..]),
             "next" => {
                 let ids = self.split.ids();
                 let i = ids.iter().position(|&i| i == self.focus).unwrap_or(0);
@@ -338,6 +468,35 @@ impl App {
         }
     }
 
+    /// `resize-left/right/up/down`: like Ctrl+arrows in LazyVim, change the
+    /// focused pane's (or the explorer's) width and height.
+    fn resize(&mut self, which: &str) {
+        let (dir, delta) = match which {
+            "right" => (Dir::Vertical, RESIZE_STEP),
+            "left" => (Dir::Vertical, -RESIZE_STEP),
+            "up" => (Dir::Horizontal, RESIZE_STEP),
+            "down" => (Dir::Horizontal, -RESIZE_STEP),
+            other => return self.notify("error", &format!("unknown resize direction: {other}")),
+        };
+        if self.tree_focused {
+            if dir == Dir::Vertical {
+                self.resize_tree(delta);
+            }
+            return;
+        }
+        if self.split.resize(self.layout.main, self.focus, dir, delta) {
+            self.relayout(self.screen);
+        }
+    }
+
+    fn resize_tree(&mut self, delta: i32) {
+        if let Some(tree) = &mut self.tree {
+            let max = (self.screen.width / 2).max(TREE_MIN_WIDTH);
+            tree.width = (tree.width as i32 + delta).clamp(TREE_MIN_WIDTH as i32, max as i32) as u16;
+            self.relayout(self.screen);
+        }
+    }
+
     fn handle_term(&mut self, ev: Event) {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
@@ -353,21 +512,33 @@ impl App {
                             self.file_op(input);
                         }
                     }
+                } else if let Some(tool) = &mut self.tool {
+                    tool.key(&key);
                 } else if is_term_toggle(&key) {
                     self.toggle_terminal();
                 } else if let (Some(term), true) = (&mut self.term, self.term_visible) {
                     term.key(&key);
                 } else if let Some(action) = self.dashboard_key(&key) {
                     self.dashboard_action(action);
+                } else if self.tree_focused && key.code == KeyCode::Char(' ') && key.modifiers.is_empty() {
+                    // The leader works from the explorer too: hand Kakoune
+                    // the keys until its user mode ends (see tree_leader).
+                    self.tree_focused = false;
+                    self.tree_leader = Some(Leader::default());
+                    self.pane_mut().kak.keys(&["<space>".to_owned()]);
                 } else if let (Some(tree), true) = (&mut self.tree, self.tree_focused) {
                     let action = tree.handle_key(&key);
                     self.tree_action(action);
                 } else if let Some(k) = keys::to_kak(&key) {
+                    if let Some(l) = &mut self.tree_leader {
+                        l.keys_after += 1;
+                    }
                     self.pane_mut().kak.keys(&[k]);
                 }
             }
             Event::Paste(text) => match (&mut self.picker, &mut self.term) {
                 (Some(p), _) => p.paste(&text),
+                _ if self.tool.is_some() => self.tool.as_mut().unwrap().paste(&text),
                 (None, Some(t)) if self.term_visible => t.paste(&text),
                 _ => self.pane_mut().kak.paste(&text),
             },
@@ -378,6 +549,14 @@ impl App {
     }
 
     fn handle_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        if let Some(t) = &mut self.tool {
+            match m.kind {
+                MouseEventKind::ScrollUp => t.scroll(3),
+                MouseEventKind::ScrollDown => t.scroll(-3),
+                _ => {}
+            }
+            return;
+        }
         if let (Some(t), true) = (&mut self.term, self.term_visible) {
             match m.kind {
                 MouseEventKind::ScrollUp => t.scroll(3),
@@ -395,6 +574,9 @@ impl App {
             return;
         }
         let pos = Position::new(m.column, m.row);
+        if self.drag(&m, pos) {
+            return;
+        }
         if let (Some(area), Some(tree)) = (self.layout.tree, &mut self.tree)
             && area.contains(pos)
         {
@@ -451,6 +633,46 @@ impl App {
         }
     }
 
+    /// Starts, continues or ends a drag on a separator or the explorer's
+    /// edge. Returns whether the event was used.
+    fn drag(&mut self, m: &crossterm::event::MouseEvent, pos: Position) -> bool {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(area) = self.layout.tree
+                    && m.column == area.right().saturating_sub(1)
+                    && area.contains(pos)
+                {
+                    self.dragging = Some(Dragging::TreeEdge);
+                    return true;
+                }
+                if let Some(sep) = self.separators.iter().find(|s| s.rect.contains(pos)) {
+                    self.dragging = Some(Dragging::Separator(sep.clone()));
+                    return true;
+                }
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) => match &self.dragging {
+                Some(Dragging::TreeEdge) => {
+                    let x = self.layout.tree.map_or(0, |a| a.x);
+                    let width = (m.column + 1).saturating_sub(x) as i32;
+                    let current = self.tree.as_ref().map_or(0, |t| t.width) as i32;
+                    self.resize_tree(width - current);
+                    true
+                }
+                Some(Dragging::Separator(sep)) => {
+                    let at = if sep.dir == Dir::Vertical { m.column } else { m.row };
+                    let sep = sep.clone();
+                    self.split.drag(self.layout.main, &sep, at);
+                    self.relayout(self.screen);
+                    true
+                }
+                None => false,
+            },
+            MouseEventKind::Up(MouseButton::Left) => self.dragging.take().is_some(),
+            _ => false,
+        }
+    }
+
     fn handle_ipc(&mut self, args: Vec<String>) {
         crate::debug!("ipc {args:?}");
         let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
@@ -487,13 +709,50 @@ impl App {
                 self.pickers.insert(arg(1).to_owned(), def);
             }
             "theme" => {
-                let (theme, errors) =
-                    Theme::from_settings(arg(1), arg(2) != "false", args.get(3..).unwrap_or_default());
-                self.theme = theme;
-                for e in errors {
+                self.theme_settings =
+                    (arg(1).to_owned(), arg(2) != "false", args.get(3..).unwrap_or_default().to_vec());
+                for e in self.rebuild_theme() {
                     self.notify("error", &e);
                 }
             }
+            "lsp-results" => {
+                let content = std::fs::read_to_string(arg(4)).unwrap_or_default();
+                let _ = std::fs::remove_file(arg(4));
+                let title = match arg(5) {
+                    "" => crate::lsp::title(arg(1), arg(2)),
+                    custom => custom.to_owned(),
+                };
+                let items = crate::lsp::items(arg(2), Path::new(arg(3)), &content);
+                if items.is_empty() {
+                    self.notify("info", &format!("{title}: nothing found"));
+                } else {
+                    self.picker = Some(Picker::list(&title, items, Accept::Location, self.tx.clone()));
+                }
+            }
+            "float" => self.run_floating(&args[1..]),
+            "blame" => {
+                let (client, file, line) = (arg(1), arg(2), arg(3).parse().unwrap_or(0));
+                // Line numbers don't match the committed file while there
+                // are unsaved edits.
+                if arg(4) == "true" || line == 0 || !Path::new(file).is_file() {
+                    self.blame = None;
+                    return;
+                }
+                if self
+                    .blame
+                    .as_ref()
+                    .is_some_and(|b| (b.client.as_str(), b.file.as_str(), b.line) == (client, file, line))
+                {
+                    return;
+                }
+                self.blame = Some(Blame { client: client.into(), file: file.into(), line, text: None });
+                let (tx, client, file) = (self.tx.clone(), client.to_owned(), file.to_owned());
+                std::thread::spawn(move || {
+                    let text = crate::git::blame_line(Path::new(&file), line);
+                    let _ = tx.send(AppEvent::Blame { client, file, line, text });
+                });
+            }
+            "blame-off" => self.blame = None,
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),
@@ -509,6 +768,14 @@ impl App {
             },
             _ => {}
         }
+    }
+
+    /// Rebuilds the theme from its settings; returns setting errors.
+    fn rebuild_theme(&mut self) -> Vec<String> {
+        let (name, transparent, overrides) = &self.theme_settings;
+        let (theme, errors) = Theme::from_settings(name, *transparent, overrides, &self.face_probe);
+        self.theme = theme;
+        errors
     }
 
     fn notify(&mut self, level: &str, message: &str) {
@@ -546,13 +813,19 @@ impl App {
                 Picker::list("Buffers", bufs, Accept::Buffer, tx)
             }
             "recent" => Picker::list("Recent Files", self.recent.files.clone(), Accept::Edit, tx),
+            "git-status" => Picker::command(
+                "Changed Files",
+                "git ls-files --modified --others --exclude-standard --deduplicate 2>/dev/null",
+                Accept::Edit,
+                tx,
+            ),
             "themes" => {
                 let names = THEMES.iter().map(|s| s.to_string()).collect();
                 Picker::list("Themes", names, Accept::Command("neokak-theme".into()), tx)
             }
             "pickers" => {
                 let mut names: Vec<String> =
-                    ["files", "grep", "buffers", "recent", "themes"].map(String::from).to_vec();
+                    ["files", "grep", "buffers", "recent", "git-status", "themes"].map(String::from).to_vec();
                 names.extend(self.pickers.keys().cloned());
                 Picker::list("Pickers", names, Accept::Picker, tx)
             }
@@ -567,6 +840,23 @@ impl App {
         self.picker = Some(picker);
     }
 
+    /// Runs a program in a floating terminal until it exits.
+    fn run_floating(&mut self, command: &[String]) {
+        let Some(prog) = command.first().filter(|p| !p.is_empty()) else { return };
+        if self.tool.is_some() {
+            return self.notify("warn", "a floating program is already running");
+        }
+        if !on_path(prog) {
+            return self.notify("error", &format!("{prog} not found"));
+        }
+        let inner = FloatTerm::area(self.screen);
+        let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
+        match FloatTerm::spawn(rows, cols, Some(command), TermSlot::Tool, self.tx.clone()) {
+            Ok(t) => self.tool = Some(t),
+            Err(e) => self.notify("error", &format!("{prog}: {e}")),
+        }
+    }
+
     fn toggle_terminal(&mut self) {
         if self.term_visible {
             self.term_visible = false;
@@ -575,7 +865,7 @@ impl App {
         if self.term.is_none() {
             let inner = FloatTerm::area(self.screen);
             let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
-            match FloatTerm::spawn(rows, cols, self.tx.clone()) {
+            match FloatTerm::spawn(rows, cols, None, TermSlot::Shell, self.tx.clone()) {
                 Ok(t) => self.term = Some(t),
                 Err(e) => return self.notify("error", &format!("terminal: {e}")),
             }
@@ -618,7 +908,9 @@ impl App {
 
     /// `<space>e`: open and focus, focus if open, close if focused.
     fn toggle_tree(&mut self) {
-        match (&mut self.tree, self.tree_focused) {
+        // From the explorer's own leader key, this means "hide it".
+        let focused = self.tree_focused || self.tree_leader.take().is_some();
+        match (&mut self.tree, focused) {
             (None, _) => {
                 let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 let mut tree = Tree::new(root);
@@ -651,6 +943,7 @@ impl App {
                 self.relayout(self.screen);
             }
             TreeAction::Unfocus => self.tree_focused = false,
+            TreeAction::Resize(delta) => self.resize_tree(delta),
             TreeAction::NewFile(dir) => self.input = Some(Input::new(Purpose::NewFile(dir), &root)),
             TreeAction::Rename(p) => self.input = Some(Input::new(Purpose::Rename(p), &root)),
             TreeAction::Delete(p) => self.input = Some(Input::new(Purpose::Delete(p), &root)),
@@ -732,6 +1025,8 @@ impl App {
             Action::Close => self.picker = None,
             Action::Eval(cmd) => {
                 self.picker = None;
+                // Whatever the picker opens shows up in the editor.
+                self.tree_focused = false;
                 self.eval(&cmd);
             }
             Action::OpenPicker(name) => self.open_picker(&name),
@@ -752,10 +1047,20 @@ impl App {
             tree.render(buf, area, self.tree_focused, theme, icons);
             // Like bufferline's neo-tree offset: label the explorer column.
             let label = Rect { width: area.width, ..layout.tabline };
-            tabline::render_offset(buf, label, "File Explorer", theme);
+            tabline::render_offset(buf, label, "File Explorer", self.tree_focused, theme);
             tabs_area = Rect { x: label.right(), width: layout.tabline.width - label.width, ..layout.tabline };
         }
-        self.tab_hits = tabline::render(buf, tabs_area, &self.buffers, &focused.current, modified, theme, icons);
+        let editor_focused = !self.tree_focused && self.tool.is_none() && !self.term_visible;
+        let active = tabline::Active { buffer: &focused.current, modified, focused: editor_focused };
+        self.tab_hits = tabline::render(buf, tabs_area, &self.buffers, &active, theme, icons);
+        for (id, rect) in &self.winbars {
+            if let Some(p) = self.panes.iter().find(|p| p.id == *id) {
+                let modified = ModeLine::parse(&p.status.mode_line).is_some_and(|m| m.modified);
+                let active =
+                    tabline::Active { buffer: &p.current, modified, focused: editor_focused && *id == self.focus };
+                tabline::render_winbar(buf, *rect, &active, theme, icons);
+            }
+        }
 
         for (id, rect) in &self.pane_rects {
             if let Some(p) = self.panes.iter().find(|p| p.id == *id) {
@@ -763,7 +1068,7 @@ impl App {
             }
         }
         let multi = self.pane_rects.len() > 1;
-        for (dir, rect) in &self.separators {
+        for Separator { dir, rect, .. } in &self.separators {
             let (glyph, cells) = match dir {
                 Dir::Vertical => ("\u{2502}", rect.height),
                 Dir::Horizontal => ("\u{2500}", rect.width),
@@ -793,9 +1098,23 @@ impl App {
         if self.dashboard {
             dashboard::render(buf, focus_rect, theme, icons);
         }
+        // Inline blame after the cursor line (gitsigns' current_line_blame).
+        if let Some(Blame { client, line, text: Some(text), .. }) = &self.blame
+            && *client == focused.client
+            && ModeLine::parse(&focused.status.mode_line).is_some_and(|m| m.line == line.to_string() && !m.modified)
+        {
+            focused.editor.render_after_cursor_line(buf, focus_rect, text, theme.float().bg(theme.bg).fg(theme.fg_dim));
+        }
 
         let status = &focused.status;
-        let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref() };
+        let focus = if self.tool.is_some() || self.term_visible {
+            Some("terminal")
+        } else if self.tree_focused {
+            Some("explorer")
+        } else {
+            None
+        };
+        let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref(), focus };
         statusline::render(buf, layout.status, &ctx, theme, icons);
         let prompt = status.is_prompt();
         let messages = if prompt { &Vec::new() } else { &status.content };
@@ -820,6 +1139,9 @@ impl App {
         if let (Some(t), true) = (&mut self.term, self.term_visible) {
             t.render(buf, screen, theme);
         }
+        if let Some(t) = &mut self.tool {
+            t.render(buf, screen, theme);
+        }
         if let Some(input) = &self.input {
             input.render(buf, screen, theme);
         }
@@ -833,6 +1155,14 @@ impl App {
 /// as `<c-4>`).
 fn is_term_toggle(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('\\' | '4'))
+}
+
+/// Whether `prog` can be run (a path, or a name found on PATH).
+fn on_path(prog: &str) -> bool {
+    if prog.contains('/') {
+        return Path::new(prog).is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(prog).is_file()))
 }
 
 fn git_branch() -> Option<String> {
