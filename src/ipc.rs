@@ -37,3 +37,24 @@ pub fn send(path: &Path, args: &[String]) -> Result<()> {
     stream.write_all(args.join("\0").as_bytes())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn round_trips_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ipc.sock");
+        let (tx, rx) = mpsc::channel();
+        listen(&sock, tx).unwrap();
+        let args = ["picker-define", "x", "Title with spaces", "ls | sort", ""].map(String::from);
+        send(&sock, &args).unwrap();
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            AppEvent::Ipc(got) => assert_eq!(got, args),
+            _ => panic!("expected Ipc"),
+        }
+    }
+}

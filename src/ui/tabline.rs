@@ -74,3 +74,39 @@ pub fn render_offset(buf: &mut Buffer, area: Rect, label: &str, theme: &Theme) {
     let pad = (area.width as usize).saturating_sub(width(label)) / 2;
     put(buf, area.x + pad as u16, area.y, area.right(), label, style);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::draw::rows;
+
+    fn bufs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn draw(buffers: &[String], current: &str, width: u16) -> (String, Vec<Hit>) {
+        let area = Rect::new(0, 0, width, 1);
+        let mut buf = Buffer::empty(area);
+        let hits = render(&mut buf, area, buffers, current, false, &Theme::default(), &Icons { nerd: false });
+        (rows(&buf).join(""), hits)
+    }
+
+    #[test]
+    fn hides_special_buffers_unless_current() {
+        let b = bufs(&["*debug*", "src/a.rs", "src/b.rs"]);
+        let (text, hits) = draw(&b, "src/b.rs", 80);
+        assert!(!text.contains("debug"));
+        assert_eq!(hits.iter().map(|h| h.buffer.as_str()).collect::<Vec<_>>(), ["src/a.rs", "src/b.rs"]);
+        assert!(hits[0].end <= hits[1].start, "tabs don't overlap");
+        let (text, _) = draw(&b, "*debug*", 80);
+        assert!(text.contains("*debug*"));
+    }
+
+    #[test]
+    fn scrolls_to_keep_current_visible() {
+        let names: Vec<String> = (0..20).map(|i| format!("file{i}.rs")).collect();
+        let (_, hits) = draw(&names, "file19.rs", 40);
+        assert!(hits.iter().any(|h| h.buffer == "file19.rs"));
+        assert!(!hits.iter().any(|h| h.buffer == "file0.rs"));
+    }
+}

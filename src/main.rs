@@ -1,14 +1,3 @@
-mod app;
-mod debug;
-mod event;
-mod git;
-mod ipc;
-mod kak;
-mod keys;
-mod pane;
-mod recent;
-mod ui;
-
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::process::Command;
@@ -26,14 +15,13 @@ use crossterm::{cursor, execute};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::event::AppEvent;
-use crate::kak::client::KakClient;
-use crate::kak::session::quote;
-use crate::ui::icons::Icons;
+use neokak::event::AppEvent;
+use neokak::kak::client::KakClient;
+use neokak::kak::session::quote;
+use neokak::ui::icons::Icons;
+use neokak::{RC, app, ipc, log_path};
 
 static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
-
-const RC: &str = include_str!("../rc/neokak.kak");
 
 const USAGE: &str = "\
 neokak - a Neovim-style IDE frontend for Kakoune
@@ -86,16 +74,6 @@ fn runtime_dir() -> PathBuf {
         .map(|d| PathBuf::from(d).join("neokak"))
         .unwrap_or_else(|| std::env::temp_dir().join(format!("neokak-{}", std::env::var("USER").unwrap_or_default())));
     base.join(std::process::id().to_string())
-}
-
-fn log_path() -> PathBuf {
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = state.join("neokak");
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("kak.log")
 }
 
 fn run(opts: Options) -> Result<()> {

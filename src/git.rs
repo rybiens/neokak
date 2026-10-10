@@ -97,6 +97,50 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    #[test]
+    fn reads_working_tree_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git(&root, &["init", "-q"]);
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/tracked.rs"), "a").unwrap();
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "init"]);
+
+        std::fs::write(root.join("src/tracked.rs"), "b").unwrap();
+        std::fs::write(root.join("new.txt"), "").unwrap();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("target/out"), "").unwrap();
+
+        let st = GitStatus::load(&root);
+        assert_eq!(st.get(&root.join("src/tracked.rs")), Some(Status::Modified));
+        assert_eq!(st.get(&root.join("src")), Some(Status::Modified), "parent dirs inherit changes");
+        assert_eq!(st.get(&root.join("new.txt")), Some(Status::Untracked));
+        assert_eq!(st.get(&root.join("target/out")), Some(Status::Ignored), "inside an ignored dir");
+        assert_eq!(st.get(&root.join(".gitignore")), None);
+    }
+
+    #[test]
+    fn outside_a_repo_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), "").unwrap();
+        assert_eq!(GitStatus::load(dir.path()).get(&dir.path().join("f")), None);
+    }
+
     #[test]
     fn xy_codes() {
         assert_eq!(Status::from_xy("??"), Some(Status::Untracked));

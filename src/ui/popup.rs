@@ -268,3 +268,105 @@ pub fn render_toasts(buf: &mut Buffer, editor: Rect, toasts: &[Toast], theme: &T
         y += h;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kak::rpc::Atom;
+    use crate::ui::draw::rows;
+
+    fn line(s: &str) -> Line {
+        vec![Atom { face: Face::default(), contents: s.into() }]
+    }
+
+    #[test]
+    fn places_below_or_above_the_anchor() {
+        let editor = Rect::new(0, 1, 80, 20);
+        let below = place_near(editor, Coord { line: 2, column: 10 }, 20, 5, false);
+        assert_eq!((below.x, below.y), (9, 4));
+        let above = place_near(editor, Coord { line: 18, column: 10 }, 20, 5, false);
+        assert_eq!(above.y, 14, "no room below, so it flips above");
+        let preferred = place_near(editor, Coord { line: 10, column: 0 }, 20, 5, true);
+        assert_eq!(preferred.bottom(), editor.y + 10);
+    }
+
+    #[test]
+    fn beside_avoids_covering_the_target() {
+        let target = Rect::new(10, 5, 20, 3);
+        let right = beside(target, 40, 10, Rect::new(0, 0, 100, 30));
+        assert_eq!((right.x, right.y), (30, 5));
+        let below = beside(target, 40, 10, Rect::new(0, 0, 50, 30));
+        assert_eq!(below.y, target.bottom());
+        assert!(below.intersection(target).is_empty());
+    }
+
+    #[test]
+    fn whichkey_sorts_and_renders_entries() {
+        let info = Info {
+            title: line("user"),
+            content: vec![line("f: +find"), line("b: +buffer"), line("<space>: find files")],
+            anchor: Coord::default(),
+            style: "prompt".into(),
+        };
+        let area = Rect::new(0, 0, 100, 10);
+        let mut buf = Buffer::empty(area);
+        render_whichkey(&mut buf, area, &info, &Theme::default(), &Icons { nerd: false });
+        let text = rows(&buf).join("\n");
+        let pos = |s: &str| text.find(s).unwrap_or_else(|| panic!("{s:?} not in {text}"));
+        assert!(pos("<space> -> find files") < pos("b -> +buffer"));
+        assert!(pos("b -> +buffer") < pos("f -> +find"));
+        assert!(text.contains("user"));
+    }
+
+    #[test]
+    fn cmdline_shows_prompt_and_keeps_cursor_visible() {
+        let screen = Rect::new(0, 0, 60, 20);
+        let status = Status {
+            prompt: line(":"),
+            content: line(&format!("edit {}", "x".repeat(100))),
+            cursor_pos: 105,
+            style: "command".into(),
+            ..Status::default()
+        };
+        let mut buf = Buffer::empty(screen);
+        let rect = render_cmdline(&mut buf, screen, &status, &Theme::default(), &Icons { nerd: false });
+        let text = rows(&buf).join("\n");
+        assert!(text.contains("Cmdline"));
+        assert!(text.contains(":xxxx"), "start scrolled away to keep the end in view: {text}");
+        assert_eq!(rect.height, 3);
+    }
+
+    #[test]
+    fn inline_menu_highlights_selection() {
+        let editor = Rect::new(0, 0, 40, 10);
+        let menu = Menu {
+            items: vec![line("alpha"), line("beta")],
+            anchor: Coord { line: 1, column: 2 },
+            style: "inline".into(),
+            selected: Some(1),
+        };
+        let mut buf = Buffer::empty(editor);
+        let theme = Theme::default();
+        let rect = render_inline_menu(&mut buf, editor, &menu, &theme);
+        let text = rows(&buf);
+        let (y, row) = text.iter().enumerate().find(|(_, r)| r.contains("beta")).unwrap();
+        let x = row.find("beta").unwrap() as u16;
+        assert_eq!(buf[(x, y as u16)].bg, theme.bg_sel);
+        assert!(rect.y > 1, "below the anchor line");
+    }
+
+    #[test]
+    fn info_wraps_long_lines_inside_the_editor() {
+        let editor = Rect::new(0, 0, 60, 20);
+        let info = Info {
+            title: line("hover"),
+            content: vec![line(&"word ".repeat(40))],
+            anchor: Coord { line: 2, column: 5 },
+            style: "inline".into(),
+        };
+        let mut buf = Buffer::empty(editor);
+        render_info(&mut buf, editor, editor, &info, None, None, &Theme::default());
+        let wrapped = rows(&buf).iter().filter(|r| r.contains("word")).count();
+        assert!(wrapped >= 3, "200 chars in a <60 col box need several rows");
+    }
+}

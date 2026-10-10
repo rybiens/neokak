@@ -1,5 +1,7 @@
 # neokak
 
+[![CI](https://github.com/rybiens/neokak/actions/workflows/ci.yml/badge.svg)](https://github.com/rybiens/neokak/actions/workflows/ci.yml)
+
 A Neovim-style terminal IDE built on [Kakoune](https://kakoune.org).
 
 Kakoune does all the editing. neokak runs it through Kakoune's JSON UI
@@ -106,6 +108,7 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | -------------------- | --------------------------------------------------------- |
 | `NEOKAK_ASCII=1`     | Same as `--ascii`                                         |
 | `NEOKAK_DEBUG=1`     | Log frontend events to `~/.local/state/neokak/debug.log`  |
+| `NEOKAK_NO_LSP=1`    | Don't load kak-lsp (if your kakrc loads it, it still runs) |
 
 The colors are a fixed gruvbox-dark palette for now. Text inside the editor
 uses your Kakoune colorscheme.
@@ -228,8 +231,34 @@ The code is in `src/`:
 | `src/ui/`            | Every visible component                          |
 | `src/ipc.rs`         | The `neokak msg` side channel                    |
 | `rc/neokak.kak`      | Kakscript glue, default keys, plugin manager     |
+| `tests/`             | Integration and end-to-end tests                 |
 
-Run the tests with `cargo test`.
+## Testing
+
+```sh
+cargo test
+```
+
+The suite has three layers:
+
+- **Unit tests** (in `src/`): protocol parsing, key translation, layout,
+  pickers, the file tree, git status, and rendering of each component into
+  an off-screen buffer.
+- **Protocol tests** (`tests/kak_protocol.rs`): neokak's client code against
+  a real `kak -ui json`.
+- **End-to-end tests** (`tests/e2e.rs`): the real `neokak` binary in a
+  pseudo-terminal, driven by keystrokes, with the screen checked as text.
+  They cover opening and saving files, which-key, the pickers, live grep, the
+  explorer, splits, the terminal, and clean shutdown.
+
+The kak-backed tests need `kak` on your PATH and are skipped without it (live
+grep also needs `rg`). They run against temporary HOME and XDG directories,
+so they never touch your config or running sessions.
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push
+to `master` and on pull requests. Its **build** stage checks formatting, runs
+clippy and builds on stable and on the minimum supported Rust (1.88). Its
+**test** stage builds Kakoune from source and runs the whole suite.
 
 ## Troubleshooting
 

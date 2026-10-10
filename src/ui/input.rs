@@ -85,3 +85,42 @@ impl Input {
         put(buf, x, inner.y, inner.right(), "\u{258f}", theme.float());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn rename_starts_with_relative_path() {
+        let root = std::path::Path::new("/proj");
+        let input = Input::new(Purpose::Rename("/proj/src/a.rs".into()), root);
+        assert_eq!(input.text, "src/a.rs");
+    }
+
+    #[test]
+    fn typing_submit_and_cancel() {
+        let mut input = Input::new(Purpose::NewFile("/proj".into()), std::path::Path::new("/proj"));
+        assert!(matches!(input.handle_key(&key(KeyCode::Enter)), InputResult::Cancel), "empty name cancels");
+        for c in "ab".chars() {
+            input.handle_key(&key(KeyCode::Char(c)));
+        }
+        input.handle_key(&key(KeyCode::Backspace));
+        input.handle_key(&key(KeyCode::Char('c')));
+        assert_eq!(input.text, "ac");
+        assert!(matches!(input.handle_key(&key(KeyCode::Enter)), InputResult::Submit));
+        assert!(matches!(input.handle_key(&key(KeyCode::Esc)), InputResult::Cancel));
+    }
+
+    #[test]
+    fn delete_needs_explicit_yes() {
+        let root = std::path::Path::new("/proj");
+        let mut input = Input::new(Purpose::Delete("/proj/a".into()), root);
+        assert!(matches!(input.handle_key(&key(KeyCode::Char('n'))), InputResult::Cancel));
+        assert!(matches!(input.handle_key(&key(KeyCode::Enter)), InputResult::Cancel));
+        assert!(matches!(input.handle_key(&key(KeyCode::Char('y'))), InputResult::Submit));
+    }
+}

@@ -15,6 +15,11 @@ impl Recent {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
             .map(|d| d.join("neokak/recent"));
+        Self::at(path)
+    }
+
+    /// Loads (and later saves) the list at `path`; `None` keeps it in memory.
+    pub fn at(path: Option<PathBuf>) -> Self {
         let files = path
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -40,5 +45,38 @@ impl Recent {
             }
             let _ = std::fs::write(p, self.files.join("\n") + "\n");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touch_orders_dedupes_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("state/recent");
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, "").unwrap();
+        std::fs::write(&b, "").unwrap();
+        let (a, b) = (a.display().to_string(), b.display().to_string());
+
+        let mut r = Recent::at(Some(store.clone()));
+        r.touch(&a);
+        r.touch(&b);
+        r.touch(&a);
+        assert_eq!(r.files, [a.clone(), b.clone()]);
+
+        assert_eq!(Recent::at(Some(store)).files, [a, b]);
+    }
+
+    #[test]
+    fn ignores_relative_and_missing_paths() {
+        let mut r = Recent::at(None);
+        r.touch("relative.txt");
+        r.touch("/definitely/not/here.txt");
+        r.touch("*scratch*");
+        assert!(r.files.is_empty());
     }
 }

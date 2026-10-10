@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch or PR cancels the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # The Kakoune release the test suite runs against.
+  KAKOUNE_VERSION: v2026.05.21
+
+jobs:
+  build:
+    name: Build (Rust ${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # stable, plus the minimum supported version from Cargo.toml.
+        toolchain: [stable, "1.88"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.toolchain }}
+
+      - name: Check formatting
+        if: matrix.toolchain == 'stable'
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        if: matrix.toolchain == 'stable'
+        run: cargo clippy --locked --all-targets
+
+      - name: Build
+        run: cargo build --locked --all-targets
+
+  test:
+    name: Test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Distro packages are too old for the JSON UI protocol neokak speaks,
+      # so build the pinned release once and cache it.
+      - name: Cache Kakoune
+        id: kakoune-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/kakoune
+          key: kakoune-${{ env.KAKOUNE_VERSION }}-${{ runner.os }}
+
+      - name: Build Kakoune
+        if: steps.kakoune-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$KAKOUNE_VERSION" https://github.com/mawww/kakoune.git "$RUNNER_TEMP/kakoune"
+          make -C "$RUNNER_TEMP/kakoune" -j"$(nproc)" install PREFIX="$HOME/.local/kakoune"
+
+      - name: Add Kakoune to PATH
+        run: |
+          echo "$HOME/.local/kakoune/bin" >> "$GITHUB_PATH"
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Show tool versions
+        run: |
+          kak -version
+          rg --version | head -1
+          git --version
+
+      - name: Run tests
+        env:
+          # Fail instead of skipping if kak is missing.
+          NEOKAK_REQUIRE_KAK: "1"
+        run: cargo test --locked --all-targets

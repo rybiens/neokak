@@ -41,8 +41,11 @@ hook global ModeChange '(?:push|pop):.*:(.*)' %{
 }
 
 # kak-lsp: keep the user's setup if their kakrc already loaded it.
+# NEOKAK_NO_LSP=1 skips loading it here (the test suite uses this).
 try %{ nop %opt{lsp_servers} } catch %{
-    evaluate-commands %sh{ command -v kak-lsp >/dev/null 2>&1 && kak-lsp --kakoune -s "$kak_session" }
+    evaluate-commands %sh{
+        [ -z "$NEOKAK_NO_LSP" ] && command -v kak-lsp >/dev/null 2>&1 && kak-lsp --kakoune -s "$kak_session"
+    }
     try lsp-enable
 }
 try %{ nop %opt{lsp_diagnostic_error_count} } catch %{

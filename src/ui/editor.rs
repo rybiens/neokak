@@ -25,3 +25,19 @@ impl EditorView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kak::rpc::Atom;
+
+    #[test]
+    fn draws_lines_and_blanks_the_rest() {
+        let atom = |s: &str| Atom { face: Face::default(), contents: s.into() };
+        let view = EditorView { lines: vec![vec![atom("hel"), atom("lo\n")]], default_face: Face::default() };
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::empty(area);
+        view.render(&mut buf, area);
+        assert_eq!(crate::ui::draw::rows(&buf), ["hello     ", "          ", "          "]);
+    }
+}

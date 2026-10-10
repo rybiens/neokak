@@ -284,3 +284,94 @@ impl Tree {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::draw::rows;
+
+    fn key(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    fn names(t: &Tree) -> Vec<&str> {
+        t.entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    /// root/{docs/, src/main.rs, b.txt, A.md, .hidden}
+    fn fixture() -> (tempfile::TempDir, Tree) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        for f in ["src/main.rs", "b.txt", "A.md", ".hidden"] {
+            std::fs::write(root.join(f), "").unwrap();
+        }
+        let tree = Tree::new(root.to_path_buf());
+        (dir, tree)
+    }
+
+    #[test]
+    fn lists_dirs_first_case_insensitively_without_dotfiles() {
+        let (_dir, mut t) = fixture();
+        assert_eq!(names(&t), ["docs", "src", "A.md", "b.txt"]);
+        t.handle_key(&key(KeyCode::Char('H')));
+        assert_eq!(names(&t), ["docs", "src", ".hidden", "A.md", "b.txt"]);
+    }
+
+    #[test]
+    fn expands_collapses_and_opens() {
+        let (dir, mut t) = fixture();
+        t.handle_key(&key(KeyCode::Char('j'))); // src
+        assert!(matches!(t.handle_key(&key(KeyCode::Char('l'))), TreeAction::None));
+        assert_eq!(names(&t), ["docs", "src", "main.rs", "A.md", "b.txt"]);
+        assert_eq!(t.entries[2].guides, "│ └ ");
+
+        t.handle_key(&key(KeyCode::Char('j'))); // main.rs
+        match t.handle_key(&key(KeyCode::Enter)) {
+            TreeAction::Open(p) => assert_eq!(p, dir.path().join("src/main.rs")),
+            _ => panic!("expected Open"),
+        }
+        // h on a file jumps to its parent; h again collapses it.
+        t.handle_key(&key(KeyCode::Char('h')));
+        assert_eq!(t.selected_path(), Some(dir.path().join("src").as_path()));
+        t.handle_key(&key(KeyCode::Char('h')));
+        assert_eq!(names(&t), ["docs", "src", "A.md", "b.txt"]);
+    }
+
+    #[test]
+    fn reveal_expands_parents_and_selects() {
+        let (dir, mut t) = fixture();
+        let file = dir.path().join("src/main.rs");
+        t.reveal(&file);
+        assert_eq!(t.selected_path(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn file_operations_target_the_right_paths() {
+        let (dir, mut t) = fixture();
+        t.reveal(&dir.path().join("src/main.rs"));
+        match t.handle_key(&key(KeyCode::Char('a'))) {
+            TreeAction::NewFile(d) => assert_eq!(d, dir.path().join("src")),
+            _ => panic!("expected NewFile"),
+        }
+        match t.handle_key(&key(KeyCode::Char('d'))) {
+            TreeAction::Delete(p) => assert_eq!(p, dir.path().join("src/main.rs")),
+            _ => panic!("expected Delete"),
+        }
+        assert!(matches!(t.handle_key(&key(KeyCode::Char('q'))), TreeAction::Close));
+        assert!(matches!(t.handle_key(&key(KeyCode::Esc)), TreeAction::Unfocus));
+    }
+
+    #[test]
+    fn renders_root_and_entries() {
+        let (dir, mut t) = fixture();
+        let area = Rect::new(0, 0, 30, 8);
+        let mut buf = Buffer::empty(area);
+        t.render(&mut buf, area, true, &Theme::default(), &Icons { nerd: false });
+        let text = rows(&buf).join("\n");
+        let root = dir.path().file_name().unwrap().to_str().unwrap();
+        assert!(text.contains(root), "{text}");
+        assert!(text.contains("> docs") && text.contains("A.md"), "{text}");
+    }
+}

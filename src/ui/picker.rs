@@ -473,6 +473,107 @@ fn spawn_rg(query: String, id: u64, current: Arc<AtomicU64>, tx: Tx) {
 mod tests {
     use super::*;
 
+    use std::sync::mpsc;
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn special(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    /// Lets the background matcher finish.
+    fn settle(p: &mut Picker) {
+        for _ in 0..200 {
+            let Source::Fuzzy(n) = &mut p.source else { return };
+            let running = n.tick(10).running;
+            if !running && n.snapshot().item_count() == n.injector().injected_items() {
+                return;
+            }
+        }
+    }
+
+    fn list(items: &[&str], accept: Accept) -> Picker {
+        let (tx, _rx) = mpsc::channel();
+        let mut p = Picker::list("Test", items.iter().map(|s| s.to_string()).collect(), accept, tx);
+        settle(&mut p);
+        p
+    }
+
+    fn type_query(p: &mut Picker, q: &str) {
+        for c in q.chars() {
+            p.handle_key(&key(c));
+        }
+        settle(p);
+    }
+
+    fn eval(action: Action) -> String {
+        match action {
+            Action::Eval(cmd) => cmd,
+            _ => panic!("expected Eval"),
+        }
+    }
+
+    #[test]
+    fn fuzzy_filters_and_ranks() {
+        let mut p = list(&["src/app.rs", "src/main.rs", "README.md", "src/ui/picker.rs"], Accept::Edit);
+        assert_eq!(p.count(), (4, 4));
+        type_query(&mut p, "pkr");
+        assert_eq!(p.count().0, 1);
+        assert_eq!(p.item(0).as_deref(), Some("src/ui/picker.rs"));
+
+        p.handle_key(&special(KeyCode::Backspace));
+        p.handle_key(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        settle(&mut p);
+        assert_eq!(p.count().0, 4, "<c-u> clears the query");
+    }
+
+    #[test]
+    fn accept_builds_quoted_commands() {
+        let mut p = list(&["it's here.txt"], Accept::Edit);
+        assert_eq!(eval(p.handle_key(&special(KeyCode::Enter))), "edit -- 'it''s here.txt'");
+
+        let mut p = list(&["*scratch*"], Accept::Buffer);
+        assert_eq!(eval(p.handle_key(&special(KeyCode::Enter))), "buffer -- '*scratch*'");
+
+        let mut p = list(&["gruvbox-dark"], Accept::Command("colorscheme".into()));
+        assert_eq!(eval(p.handle_key(&special(KeyCode::Enter))), "colorscheme 'gruvbox-dark'");
+
+        let mut p = list(&["src/a.rs:10:5:let x = 1;"], Accept::GrepHit);
+        assert_eq!(eval(p.handle_key(&special(KeyCode::Enter))), "edit -- 'src/a.rs' 10 5");
+
+        let mut p = list(&["files"], Accept::Picker);
+        assert!(matches!(p.handle_key(&special(KeyCode::Enter)), Action::OpenPicker(n) if n == "files"));
+    }
+
+    #[test]
+    fn navigation_and_close() {
+        let mut p = list(&["a", "b", "c"], Accept::Edit);
+        p.handle_key(&special(KeyCode::Down));
+        p.handle_key(&KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        p.handle_key(&special(KeyCode::Down)); // clamped at the end
+        assert_eq!(p.selected, 2);
+        p.handle_key(&special(KeyCode::Up));
+        assert_eq!(p.selected, 1);
+        assert!(matches!(p.handle_key(&special(KeyCode::Esc)), Action::Close));
+        let mut empty = list(&[], Accept::Edit);
+        assert!(matches!(empty.handle_key(&special(KeyCode::Enter)), Action::None));
+    }
+
+    #[test]
+    fn live_results_respect_generation() {
+        let (tx, _rx) = mpsc::channel();
+        let mut p = Picker::grep(tx);
+        p.grep_results(0, vec!["stale".into()], true);
+        assert_eq!(p.count().0, 1, "generation 0 is current before any query");
+        p.query_changed(false); // bumps the generation and clears results
+        p.grep_results(0, vec!["old".into()], true);
+        assert_eq!(p.count().0, 0);
+        p.grep_results(1, vec!["a:1:1:x".into(), "b:2:1:y".into()], true);
+        assert_eq!(p.count().0, 2);
+    }
+
     #[test]
     fn grep_lines() {
         assert_eq!(parse_grep("src/main.rs:10:5:fn main() {"), Some(("src/main.rs", 10, 5, "fn main() {")));

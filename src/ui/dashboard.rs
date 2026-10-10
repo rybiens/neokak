@@ -101,3 +101,30 @@ pub fn render(buf: &mut Buffer, area: Rect, theme: &Theme, icons: &Icons) {
         Style::new().fg(theme.fg_dim).add_modifier(Modifier::ITALIC),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::draw::rows;
+
+    #[test]
+    fn buttons_map_to_actions() {
+        let icons = Icons { nerd: false };
+        let k = |c, m| action_for(&KeyEvent::new(KeyCode::Char(c), m), &icons);
+        assert!(matches!(k('f', KeyModifiers::NONE), Some(DashAction::Picker("files"))));
+        assert!(matches!(k('g', KeyModifiers::NONE), Some(DashAction::Picker("grep"))));
+        assert!(matches!(k('q', KeyModifiers::NONE), Some(DashAction::Quit)));
+        assert!(k('f', KeyModifiers::CONTROL).is_none());
+        assert!(k('x', KeyModifiers::NONE).is_none());
+    }
+
+    #[test]
+    fn renders_logo_and_buttons() {
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        render(&mut buf, area, &Theme::default(), &Icons { nerd: false });
+        let text = rows(&buf).join("\n");
+        assert!(text.contains("███╗"), "logo");
+        assert!(text.contains("Find file") && text.contains("Quit"), "{text}");
+    }
+}

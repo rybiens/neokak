@@ -174,6 +174,36 @@ mod tests {
         assert!(ModeLine::parse(&line("t.txt 1:1")).is_none());
     }
 
+    fn render_text(mode_line: &Line, branch: Option<&str>) -> String {
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        let ctx = StatusContext { mode_line, branch };
+        render(&mut buf, area, &ctx, &Theme::default(), &Icons { nerd: false });
+        crate::ui::draw::rows(&buf).join("")
+    }
+
+    #[test]
+    fn renders_lualine_sections() {
+        let text = render_text(&line("normal␞src/main.rs␞true␞12␞4␞100␞rust␞3 sels␞2␞1"), Some("main"));
+        for part in ["NORMAL", "git:main", "src/main.rs", "+", "E:2", "W:1", "3 sels", "rust", "12%", "12:4"] {
+            assert!(text.contains(part), "missing {part:?} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn hides_redundant_mode_info() {
+        let text = render_text(&line("insert␞a.txt␞false␞1␞1␞1␞␞insert␞0␞0"), None);
+        assert!(text.contains("INSERT"));
+        assert_eq!(text.matches("insert").count(), 0, "{text:?}");
+        assert!(!text.contains("E:") && !text.contains("git:"));
+    }
+
+    #[test]
+    fn falls_back_to_raw_modeline() {
+        let text = render_text(&line("custom modeline 1:1"), None);
+        assert!(text.contains("custom modeline 1:1"));
+    }
+
     #[test]
     fn labels() {
         assert_eq!(mode_label("normal"), "NORMAL");

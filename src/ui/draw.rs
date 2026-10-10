@@ -161,6 +161,14 @@ pub fn clamp(mut r: Rect, bounds: Rect) -> Rect {
     r
 }
 
+/// The text of each row of a rendered buffer (for tests).
+#[cfg(test)]
+pub(crate) fn rows(buf: &Buffer) -> Vec<String> {
+    (buf.area.y..buf.area.bottom())
+        .map(|y| (buf.area.x..buf.area.right()).map(|x| buf[(x, y)].symbol()).collect::<String>())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

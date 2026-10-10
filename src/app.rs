@@ -831,3 +831,32 @@ fn git_branch() -> Option<String> {
     let branch = String::from_utf8(out.stdout).ok()?.trim().to_owned();
     (out.status.success() && !branch.is_empty()).then_some(branch)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_rows_and_tree_column() {
+        let l = Layout::new(Rect::new(0, 0, 100, 30), None);
+        assert_eq!(l.tabline, Rect::new(0, 0, 100, 1));
+        assert_eq!(l.main, Rect::new(0, 1, 100, 27));
+        assert_eq!((l.status.y, l.messages.y), (28, 29));
+        assert!(l.tree.is_none());
+
+        let l = Layout::new(Rect::new(0, 0, 100, 30), Some(32));
+        assert_eq!(l.tree, Some(Rect::new(0, 1, 32, 27)));
+        assert_eq!(l.main, Rect::new(32, 1, 68, 27));
+
+        let l = Layout::new(Rect::new(0, 0, 60, 30), Some(40));
+        assert_eq!(l.tree.unwrap().width, 30, "the tree never takes more than half");
+    }
+
+    #[test]
+    fn terminal_toggle_key() {
+        let k = |c, m| is_term_toggle(&KeyEvent::new(KeyCode::Char(c), m));
+        assert!(k('\\', KeyModifiers::CONTROL));
+        assert!(k('4', KeyModifiers::CONTROL));
+        assert!(!k('\\', KeyModifiers::NONE));
+    }
+}
