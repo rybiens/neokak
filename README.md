@@ -31,6 +31,8 @@ model, your kakrc and your Kakoune plugins.
 - **Telescope-style pickers** with fuzzy matching and a preview pane: files,
   live grep (ripgrep), buffers, recent files, colorschemes, themes, plus your
   own
+- **LSP pickers**: document symbols, references, diagnostics, implementations
+  and other kak-lsp result lists open in a picker with a preview
 - **File explorer** (neo-tree style) with git status, plus create, rename and
   delete
 - **Floating terminal** (toggleterm style) that keeps your shell running when
@@ -130,6 +132,7 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `neokak_theme`                | `gruvbox` | Interface theme (see [Themes](#themes))        |
 | `neokak_transparent`          | `true`    | Draw popups on the terminal background         |
 | `neokak_theme_colors`         | (empty)   | Per-color theme overrides                      |
+| `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
 | `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
 
 Set them with `set-option global <option> <value>` in `init.kak`.
@@ -181,6 +184,9 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>fb` / `<space>fr`  | Buffers / recent files               |
 | `<space>fc` / `<space>ft`  | Kakoune colorschemes / neokak themes |
 | `<space>fp`                | List of all pickers                  |
+| `<space>ss` / `<space>sS`  | Document symbols / workspace symbols |
+| `<space>sr` / `<space>sd`  | References / diagnostics             |
+| `<space>si` / `<space>st`  | Implementations / type definitions   |
 | `<space>bn` / `<space>bp`  | Next / previous buffer               |
 | `<space>bd` / `<space>bD`  | Delete buffer / delete without saving |
 | `<space>e`                 | File explorer: open, focus, or close if focused |
@@ -355,7 +361,6 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
 ## Roadmap
 
 - Deriving the interface colors from the Kakoune colorscheme automatically
-- LSP pickers (symbols, references, diagnostics)
 - Git integration beyond status (hunks, blame)
 
 ## License

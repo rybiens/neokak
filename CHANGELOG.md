@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- LSP pickers: kak-lsp's result lists (document and workspace symbols,
+  references, diagnostics, implementations, call hierarchy) open in a
+  picker with a preview instead of a buffer. New `<space>s` mappings:
+  `ss` symbols, `sS` workspace symbols, `sr` references, `sd` diagnostics,
+  `si` implementations, `st` type definitions. Set
+  `neokak_lsp_pickers false` for kak-lsp's buffers.
 - Resizable panes and explorer: Ctrl+arrows (or `<space>w` then `<`, `>`,
   `+`, `-`) resize the focused pane or the explorer, `<space>w=` equalizes,
   and separators and the explorer's edge can be dragged with the mouse.

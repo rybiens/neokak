@@ -258,3 +258,25 @@ fn explorer_width_changes() {
     nk.wait_for("dragged edge", |t| separator_col(t, 3) == Some(20));
     quit(nk, &sandbox);
 }
+
+#[test]
+fn lsp_result_lists_open_in_a_picker() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    // What kak-lsp calls to show a result list (here without kak-lsp).
+    let root = sandbox.project.display().to_string();
+    nk.send(&format!(
+        ":neokak-lsp References %{{lsp-show-goto-buffer *goto* lsp-goto '{root}' 'notes.txt:2:1: line two'}}\r"
+    ));
+    nk.wait_for("references picker", |t| t.contains("References") && t.contains("notes.txt:2:1: line two"));
+    nk.send("\r");
+    nk.wait_for("cursor on line 2", |t| t.lines().any(|l| l.contains("NORMAL") && l.contains("2:1")));
+
+    // An empty list is a notification, not an empty picker.
+    nk.send(&format!(":lsp-show-goto-buffer *diagnostics* lsp-goto '{root}' ''\r"));
+    nk.wait_text("Diagnostics: nothing found");
+    quit(nk, &sandbox);
+}

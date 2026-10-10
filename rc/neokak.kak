@@ -53,6 +53,61 @@ try %{ nop %opt{lsp_diagnostic_error_count} } catch %{
     declare-option -hidden int lsp_diagnostic_warning_count 0
 }
 
+# LSP result lists in pickers
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# kak-lsp shows symbols, references, diagnostics and other lists through its
+# hidden lsp-show-goto-buffer command; send them to a neokak picker instead.
+
+declare-option -docstring 'show kak-lsp result lists (symbols, references, diagnostics) in pickers' \
+    bool neokak_lsp_pickers true
+declare-option -hidden str neokak_runtime %sh{ dirname "$NEOKAK_SOCK" }
+# Picker title for the next result list (kak-lsp sends references,
+# definitions and implementations all as *goto*).
+declare-option -hidden str neokak_lsp_title
+
+define-command -hidden neokak-lsp -params 2 %{
+    set-option global neokak_lsp_title %arg{1}
+    try %{ evaluate-commands %arg{2} } catch %{
+        set-option global neokak_lsp_title ''
+        fail %val{error}
+    }
+}
+
+define-command -override -hidden lsp-show-goto-buffer -params 4..5 %{
+    evaluate-commands %sh{
+        if [ "$kak_opt_neokak_lsp_pickers" = true ]; then
+            echo 'neokak-lsp-picker %arg{@}'
+        else
+            echo 'neokak-lsp-goto-buffer %arg{@}'
+        fi
+    }
+}
+
+define-command -hidden neokak-lsp-picker -params 4..5 %{
+    # Through a file: results can exceed the size limit of one argument.
+    echo -to-file "%opt{neokak_runtime}/lsp-results" %arg{4}
+    neokak-msg lsp-results %arg{1} %arg{2} %arg{3} "%opt{neokak_runtime}/lsp-results" %opt{neokak_lsp_title}
+    set-option global neokak_lsp_title ''
+}
+
+# kak-lsp's own behavior, for neokak_lsp_pickers=false.
+define-command -hidden neokak-lsp-goto-buffer -params 4..5 %{
+    evaluate-commands -save-regs '"' -try-client %opt[toolsclient] %{
+        edit! -scratch %arg{1}
+        set-option buffer filetype %arg{2}
+        set-option buffer jump_current_line 0
+        set-option buffer lsp_project_root "%arg{3}/"
+        set-register '"' %arg{4}
+        execute-keys Rgg
+    }
+    try %{
+        evaluate-commands -try-client %opt[toolsclient] %{
+            set-option buffer jump_current_line %arg{5}
+            execute-keys %arg{5} g
+        }
+    }
+}
+
 # Hide LSP inlay hints while in insert mode. Kakoune doesn't shift empty
 # ranges (which inlay hints are) when lines are inserted above them, so they
 # show up on the wrong line until kak-lsp's next refresh.
@@ -162,6 +217,7 @@ neokak-picker-define colorschemes 'Colorschemes' "ls '%val{runtime}/colors' '%va
 try %{ declare-user-mode find }
 try %{ declare-user-mode buffer }
 try %{ declare-user-mode window }
+try %{ declare-user-mode search }
 
 map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
 map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
@@ -170,6 +226,7 @@ map global user t       ': neokak-msg terminal<ret>'   -docstring 'terminal (<c-
 map global user f       ': enter-user-mode find<ret>'  -docstring '+find'
 map global user b       ': enter-user-mode buffer<ret>' -docstring '+buffer'
 map global user w       ': enter-user-mode window<ret>' -docstring '+window'
+map global user s       ': enter-user-mode search<ret>' -docstring '+search (LSP)'
 map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
 map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
 
@@ -201,6 +258,13 @@ map global window <lt>    ': neokak-window resize-left<ret>'  -docstring 'narrow
 map global window +       ': neokak-window resize-up<ret>'    -docstring 'taller'
 map global window <minus> ': neokak-window resize-down<ret>'  -docstring 'shorter'
 map global window =       ': neokak-window equalize<ret>'     -docstring 'equal sizes'
+
+map global search s ': lsp-document-symbol<ret>'                           -docstring 'document symbols'
+map global search S ': lsp-workspace-symbol '                              -docstring 'workspace symbols (type a query)'
+map global search r ': neokak-lsp References lsp-references<ret>'          -docstring 'references'
+map global search d ': lsp-diagnostics<ret>'                               -docstring 'diagnostics'
+map global search i ': neokak-lsp Implementations lsp-implementation<ret>' -docstring 'implementations'
+map global search t ': neokak-lsp %{Type Definitions} lsp-type-definition<ret>' -docstring 'type definition'
 
 # Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
 map global normal <c-right> ': neokak-window resize-right<ret>'

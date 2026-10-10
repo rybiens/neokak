@@ -584,6 +584,20 @@ impl App {
                     self.notify("error", &e);
                 }
             }
+            "lsp-results" => {
+                let content = std::fs::read_to_string(arg(4)).unwrap_or_default();
+                let _ = std::fs::remove_file(arg(4));
+                let title = match arg(5) {
+                    "" => crate::lsp::title(arg(1), arg(2)),
+                    custom => custom.to_owned(),
+                };
+                let items = crate::lsp::items(arg(2), Path::new(arg(3)), &content);
+                if items.is_empty() {
+                    self.notify("info", &format!("{title}: nothing found"));
+                } else {
+                    self.picker = Some(Picker::list(&title, items, Accept::Location, self.tx.clone()));
+                }
+            }
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),

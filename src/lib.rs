@@ -10,6 +10,7 @@ pub mod git;
 pub mod ipc;
 pub mod kak;
 pub mod keys;
+pub mod lsp;
 pub mod pane;
 pub mod recent;
 pub mod ui;
