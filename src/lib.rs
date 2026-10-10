@@ -13,6 +13,7 @@ pub mod keys;
 pub mod lsp;
 pub mod pane;
 pub mod recent;
+pub mod session;
 pub mod ui;
 
 use std::path::PathBuf;

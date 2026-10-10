@@ -44,6 +44,9 @@ model, your kakrc and your Kakoune plugins.
 - **Split panes**: each pane is a separate Kakoune client on the same session,
   so buffers, registers and LSP are shared. Resize panes and the explorer with
   Ctrl+arrows or by dragging their edges.
+- **Project sessions**: the files open in each project (and the cursor in
+  each) are saved as you work; restore them, or switch projects, from the
+  dashboard or `<space>q`
 - **Start dashboard** when opened without files
 - **Notification toasts**
 - **Plugin manager** for Kakoune plugins, plus a small kakscript API for adding
@@ -141,6 +144,8 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `neokak_git_signs`            | `true`    | Git change markers in the gutter               |
 | `neokak_git_blame_line`       | `false`   | Show who last changed the cursor line          |
 | `neokak_git_tool`             | `lazygit` | Program `<space>gg` runs                       |
+| `neokak_session`              | `true`    | Save the open files of each project            |
+| `neokak_session_autorestore`  | `false`   | Restore the session when started without files |
 | `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
 | `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
 
@@ -151,6 +156,28 @@ Set them with `set-option global <option> <value>` in `init.kak`.
 | `NEOKAK_ASCII=1`     | Same as `--ascii`                                         |
 | `NEOKAK_DEBUG=1`     | Log frontend events to `~/.local/state/neokak/debug.log`  |
 | `NEOKAK_NO_LSP=1`    | Don't load kak-lsp (if your kakrc loads it, it still runs) |
+
+### Sessions
+
+neokak treats the directory you start it in as the project. While you work,
+it saves which files are open there, the cursor position in each, and which
+one was showing, to `~/.local/state/neokak/sessions/`. Saving happens when
+you switch files, save, and quit, so a session survives a closed window too.
+
+- Start neokak in a project without files and press `s` on the dashboard
+  (or `<space>qs` any time) to reopen that project's files.
+- `<space>qp` (or `p` on the dashboard) lists every project with a saved
+  session; picking one switches neokak and Kakoune to that directory and
+  restores its files.
+- `<space>qd` deletes the current project's session and stops saving it
+  until neokak restarts.
+- Set `neokak_session_autorestore true` to restore automatically whenever
+  neokak starts without files.
+
+Opening neokak on specific files (`neokak foo.rs`) also updates the project's
+session, to just those files once you quit. Files that no longer exist are
+skipped when restoring, and temporary copies from outside the project (such
+as sudoedit's) are never saved.
 
 ### Themes
 
@@ -205,6 +232,9 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>gn` / `<space>gp`  | Next / previous change               |
 | `<space>gb` / `<space>gB`  | Toggle line blame / blame whole file |
 | `<space>gd`                | Diff of the current file             |
+| `<space>qs`                | Restore this project's session       |
+| `<space>qp`                | Switch project                       |
+| `<space>qd`                | Forget this project's session        |
 | `<space>bn` / `<space>bp`  | Next / previous buffer               |
 | `<space>bd` / `<space>bD`  | Delete buffer / delete without saving |
 | `<space>e`                 | File explorer: open, focus, or close if focused |
@@ -282,6 +312,11 @@ neokak-theme <name>
 
 # Run a program in a floating terminal until it exits.
 neokak-float <program> [<args>...]
+
+# Sessions.
+neokak-session-restore
+neokak-session-load <dir>
+neokak-session-forget
 
 # Explorer and panes, as used by the default mappings.
 neokak-explorer
@@ -389,7 +424,7 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
 
 - Live workspace-symbol search (results update as you type)
 - Staging and resetting individual git hunks
-- Restoring the last session's buffers and layout
+- Restoring split layouts with sessions
 
 ## License
 

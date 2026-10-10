@@ -449,3 +449,123 @@ fn quitting_lets_kakoune_finish_its_shutdown_hooks() {
     assert!(nk.wait_exit());
     common::wait_file(&marker, |_| marker.exists());
 }
+
+fn sessions_dir(sandbox: &Sandbox) -> std::path::PathBuf {
+    sandbox.home.join(".local/state/neokak/sessions")
+}
+
+#[test]
+fn sessions_are_saved_and_restored_from_the_dashboard() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(":edit other.txt\r");
+    nk.wait_text("second file");
+    nk.send(":edit notes.txt\r");
+    nk.wait_text("hello from neokak");
+    nk.send("j");
+    let mut nk = nk;
+    nk.send(":q\r");
+    assert!(nk.wait_exit());
+
+    let file = neokak::session::file_for(&sessions_dir(&sandbox), &sandbox.project);
+    let saved = neokak::session::Session::load(&file).expect("session saved");
+    assert_eq!(saved.buffers.len(), 2, "{saved:?}");
+    assert!(saved.current.as_deref().is_some_and(|c| c.ends_with("notes.txt")));
+
+    // A fresh start without files: restore from the dashboard.
+    let nk = Neokak::spawn(&sandbox, &["--clean"]);
+    nk.wait_text("Restore session");
+    nk.send("s");
+    nk.wait_for("both files back, cursor on line 2", |t| {
+        let tabs = t.lines().next().unwrap_or_default();
+        tabs.contains("notes.txt")
+            && tabs.contains("other.txt")
+            && t.contains("hello from neokak")
+            && status(t).contains("2:1")
+    });
+    nk.wait_text("Restored 2 files");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn sessions_can_restore_automatically() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let other = sandbox.project.join("other.txt").display().to_string();
+    let session = neokak::session::Session {
+        cwd: sandbox.project.display().to_string(),
+        current: Some(other.clone()),
+        buffers: vec![neokak::session::Entry { path: other, line: 1, column: 1 }],
+    };
+    session.save(&neokak::session::file_for(&sessions_dir(&sandbox), &sandbox.project)).unwrap();
+    let config = sandbox.home.join(".config/neokak");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("init.kak"), "set-option global neokak_session_autorestore true\n").unwrap();
+
+    let nk = Neokak::spawn(&sandbox, &["--clean"]);
+    nk.wait_for("restored without asking", |t| t.contains("second file") && !t.contains("Restore session"));
+    quit(nk, &sandbox);
+
+    // Not when files are given.
+    let nk = open_notes(&sandbox);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!nk.contents().contains("second file"));
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn projects_picker_switches_project() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let other = sandbox.home.join("other-project");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("a.txt"), "from the other project\n").unwrap();
+    let a = other.join("a.txt").display().to_string();
+    let session = neokak::session::Session {
+        cwd: other.display().to_string(),
+        current: Some(a.clone()),
+        buffers: vec![neokak::session::Entry { path: a, line: 1, column: 1 }],
+    };
+    session.save(&neokak::session::file_for(&sessions_dir(&sandbox), &other)).unwrap();
+
+    let nk = open_notes(&sandbox);
+    nk.send(" qp");
+    nk.wait_for("projects picker", |t| t.contains("Projects") && t.contains("other-project"));
+    nk.send("\r");
+    nk.wait_for("switched", |t| {
+        t.contains("from the other project") && t.lines().next().unwrap_or_default().contains("a.txt")
+    });
+    // Pickers now work in the new project.
+    nk.send(" ff");
+    nk.wait_for("files of the new project", |t| t.contains("Find Files") && t.contains("1/1"));
+    nk.esc();
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn sessions_can_be_forgotten() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let file = neokak::session::file_for(&sessions_dir(&sandbox), &sandbox.project);
+    let nk = open_notes(&sandbox);
+    nk.send(":edit other.txt\r");
+    nk.wait_text("second file");
+    common::wait_file(&file, |s| s.contains("other.txt"));
+    nk.send(" qd");
+    nk.wait_text("Session forgotten");
+    assert!(!file.exists());
+    nk.send(":edit notes.txt\r");
+    nk.wait_text("hello from neokak");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!file.exists(), "not saved again this run");
+    quit(nk, &sandbox);
+}

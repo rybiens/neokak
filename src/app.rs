@@ -162,6 +162,9 @@ pub struct App {
     /// Inline blame for the focused pane's cursor line.
     blame: Option<Blame>,
     dashboard: bool,
+    /// Whether to keep saving this project's session (`neokak-session-forget`
+    /// turns it off until restart).
+    session_saving: bool,
 
     dirty: bool,
     quit: bool,
@@ -204,6 +207,7 @@ impl App {
             theme_settings: ("gruvbox".into(), true, Vec::new()),
             face_probe: Vec::new(),
             dashboard,
+            session_saving: true,
             dirty: true,
             quit: false,
         }
@@ -753,6 +757,26 @@ impl App {
                 });
             }
             "blame-off" => self.blame = None,
+            "session" => {
+                if arg(1) == "true" && self.session_saving {
+                    self.save_session(&args[2..]);
+                }
+            }
+            "session-restore" => self.restore_session(None),
+            "session-autorestore" => {
+                // Only when started without files (the dashboard is up).
+                if arg(1) == "true" && self.dashboard {
+                    self.restore_session(None);
+                }
+            }
+            "session-forget" => {
+                self.session_saving = false;
+                if let Some(file) = self.session_file() {
+                    let _ = std::fs::remove_file(file);
+                }
+                self.notify("info", "Session forgotten; not saving it until neokak restarts");
+            }
+            "session-load" => self.switch_project(arg(1)),
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),
@@ -813,6 +837,14 @@ impl App {
                 Picker::list("Buffers", bufs, Accept::Buffer, tx)
             }
             "recent" => Picker::list("Recent Files", self.recent.files.clone(), Accept::Edit, tx),
+            "projects" => {
+                let projects = crate::session::dir().map(|d| crate::session::projects(&d)).unwrap_or_default();
+                if projects.is_empty() {
+                    self.notify("info", "No saved sessions yet; they're saved as you work in a project");
+                    return;
+                }
+                Picker::list("Projects", projects, Accept::Command("neokak-session-load".into()), tx)
+            }
             "git-status" => Picker::command(
                 "Changed Files",
                 "git ls-files --modified --others --exclude-standard --deduplicate 2>/dev/null",
@@ -824,8 +856,9 @@ impl App {
                 Picker::list("Themes", names, Accept::Command("neokak-theme".into()), tx)
             }
             "pickers" => {
-                let mut names: Vec<String> =
-                    ["files", "grep", "buffers", "recent", "git-status", "themes"].map(String::from).to_vec();
+                let mut names: Vec<String> = ["files", "grep", "buffers", "recent", "projects", "git-status", "themes"]
+                    .map(String::from)
+                    .to_vec();
                 names.extend(self.pickers.keys().cloned());
                 Picker::list("Pickers", names, Accept::Picker, tx)
             }
@@ -838,6 +871,56 @@ impl App {
             },
         };
         self.picker = Some(picker);
+    }
+
+    /// This project's session file.
+    fn session_file(&self) -> Option<PathBuf> {
+        Some(crate::session::file_for(&crate::session::dir()?, &std::env::current_dir().ok()?))
+    }
+
+    fn save_session(&mut self, sync: &[String]) {
+        let (Some(file), Ok(cwd)) = (self.session_file(), std::env::current_dir()) else { return };
+        let session = crate::session::Session::from_sync(&cwd, self.current_file.as_deref(), sync);
+        // Never replace a session with an empty one (e.g. a scratch-only run).
+        if !session.buffers.is_empty()
+            && let Err(e) = session.save(&file)
+        {
+            crate::debug!("saving session {}: {e}", file.display());
+        }
+    }
+
+    /// Reopens a project's saved files. `prefix` runs first in the same
+    /// command (e.g. a directory change), keeping the two in order.
+    fn restore_session(&mut self, prefix: Option<String>) {
+        let session = self.session_file().and_then(|f| crate::session::Session::load(&f));
+        let cmds = session.map(|s| s.restore_commands()).unwrap_or_default();
+        let dir = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+        if cmds.is_empty() {
+            if let Some(p) = prefix {
+                self.eval(&p);
+            }
+            return self.notify("info", &format!("No saved session for {dir}"));
+        }
+        let n = cmds.len();
+        let script = prefix.into_iter().chain(cmds).collect::<Vec<_>>().join("\n");
+        self.eval(&script);
+        self.notify("info", &format!("Restored {n} file{} from {dir}", if n == 1 { "" } else { "s" }));
+    }
+
+    /// Changes neokak's and Kakoune's working directory and restores the
+    /// project's session.
+    fn switch_project(&mut self, dir: &str) {
+        let path = PathBuf::from(dir);
+        if let Err(e) = std::env::set_current_dir(&path) {
+            return self.notify("error", &format!("{dir}: {e}"));
+        }
+        if self.tree.is_some() {
+            self.tree = Some(Tree::new(path));
+            self.relayout(self.screen);
+        }
+        self.branch = git_branch();
+        self.session_saving = true;
+        self.restore_session(Some(format!("change-directory {}", session::quote(dir))));
     }
 
     /// Runs a program in a floating terminal until it exits.
@@ -902,6 +985,7 @@ impl App {
                 let _ = std::fs::create_dir_all(&dir);
                 self.eval(&format!("edit -- {}", session::quote(&dir.join("init.kak").display().to_string())));
             }
+            DashAction::RestoreSession => self.restore_session(None),
             DashAction::Quit => self.eval("quit"),
         }
     }
