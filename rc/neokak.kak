@@ -1,0 +1,279 @@
+# neokak runtime glue. Sourced by the neokak frontend after the user's kakrc.
+#
+# The frontend sets $NEOKAK_BIN and $NEOKAK_SOCK in the session environment;
+# `neokak msg ...` forwards its arguments to the frontend over that socket.
+
+# Frontend messaging
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+define-command -hidden neokak-msg -params 1.. %{
+    nop %sh{ "$NEOKAK_BIN" msg "$@" >/dev/null 2>&1 </dev/null }
+}
+
+define-command -hidden neokak-sync-current %{
+    neokak-msg current %val{client} %val{bufname} %val{buffile}
+}
+
+define-command -hidden neokak-sync-buflist %{
+    neokak-msg buflist %val{buflist}
+}
+
+hook global WinDisplay .* %{
+    neokak-sync-current
+    neokak-sync-buflist
+}
+hook global BufCreate .* neokak-sync-buflist
+hook global BufClose .* %{ neokak-msg bufclose %val{hook_param} }
+hook global BufWritePost .* %{ neokak-msg written %val{hook_param} }
+# When the session's first client quits while others remain, Kakoune forks
+# the server into the background and it keeps that client's stdout open, so
+# the frontend can't rely on EOF to notice the client left.
+hook global ClientClose .* %{ neokak-msg clientclose %val{hook_param} }
+
+# Statusline data
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# The frontend draws a lualine-style statusline itself. It reads its fields
+# from the modeline, separated by U+241E so they survive Kakoune's markup.
+
+declare-option -hidden str neokak_mode normal
+hook global ModeChange '(?:push|pop):.*:(.*)' %{
+    try %{ set-option window neokak_mode %val{hook_param_capture_1} }
+}
+
+# kak-lsp: keep the user's setup if their kakrc already loaded it.
+try %{ nop %opt{lsp_servers} } catch %{
+    evaluate-commands %sh{ command -v kak-lsp >/dev/null 2>&1 && kak-lsp --kakoune -s "$kak_session" }
+    try lsp-enable
+}
+try %{ nop %opt{lsp_diagnostic_error_count} } catch %{
+    declare-option -hidden int lsp_diagnostic_error_count 0
+    declare-option -hidden int lsp_diagnostic_warning_count 0
+}
+
+# Hide LSP inlay hints while in insert mode. Kakoune doesn't shift empty
+# ranges (which inlay hints are) when lines are inserted above them, so they
+# show up on the wrong line until kak-lsp's next refresh.
+declare-option -docstring 'hide LSP inlay hints in insert mode' bool neokak_hide_hints_in_insert true
+declare-option -hidden str-list neokak_hidden_hints
+
+hook global ModeChange 'push:[^:]*:insert' %{
+    set-option window neokak_hidden_hints
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_hide_hints_in_insert" = true ] || exit
+        for scope in window buffer global; do
+            printf 'try %%{ remove-highlighter %s/lsp_inlay_hints; set-option -add window neokak_hidden_hints %s }\n' "$scope" "$scope"
+        done
+    }
+}
+
+hook global ModeChange 'pop:insert:.*' %{
+    evaluate-commands %sh{
+        eval set -- "$kak_quoted_opt_neokak_hidden_hints"
+        [ $# -eq 0 ] && exit
+        # Drop hints computed before the edits so they don't flash in the
+        # wrong place; kak-lsp's NormalIdle hook fetches fresh ones.
+        if [ "${kak_opt_lsp_inlay_hints%% *}" != "$kak_timestamp" ]; then
+            echo 'set-option buffer lsp_inlay_hints %val{timestamp}'
+        fi
+        for scope; do
+            printf 'try %%{ add-highlighter %s/lsp_inlay_hints replace-ranges lsp_inlay_hints }\n' "$scope"
+        done
+        echo 'set-option window neokak_hidden_hints'
+    }
+}
+
+set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified}␞%val{cursor_line}␞%val{cursor_char_column}␞%val{buf_line_count}␞%opt{filetype}␞{{mode_info}}␞%opt{lsp_diagnostic_error_count}␞%opt{lsp_diagnostic_warning_count}'
+
+# Pickers and the plugin API
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+define-command neokak-picker -params 1 -docstring %{
+    neokak-picker <name>: open a picker
+    Built in: files, grep, buffers, recent, pickers. Plugins add more with
+    neokak-picker-define.
+} %{
+    neokak-msg picker %arg{1}
+}
+
+define-command neokak-picker-define -params 4 -docstring %{
+    neokak-picker-define <name> <title> <source> <accept>: register a picker
+    <source> is a shell command whose output lines are the items.
+    <accept> is a Kakoune command; the chosen item is passed as its argument.
+} %{
+    neokak-msg picker-define %arg{1} %arg{2} %arg{3} %arg{4}
+}
+
+define-command neokak-explorer -docstring %{
+    neokak-explorer: open and focus the file tree (closes it if focused)
+} %{
+    neokak-msg tree
+}
+
+define-command neokak-window -params 1 -docstring %{
+    neokak-window <command>: manage split panes
+    vsplit, split, close, only, next, or h/j/k/l to move focus.
+} %{
+    neokak-msg window %arg{1}
+}
+
+define-command neokak-notify -params 1..2 -docstring %{
+    neokak-notify [<level>] <message>: show a notification toast
+    <level> is one of info, warn, error (default info).
+} %{
+    neokak-msg notify %arg{@}
+}
+
+neokak-picker-define colorschemes 'Colorschemes' "ls '%val{runtime}/colors' '%val{config}/colors' 2>/dev/null | sed -n 's/\.kak$//p' | sort -u" colorscheme
+
+# Leader keys (<space>, Kakoune's user mode)
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+try %{ declare-user-mode find }
+try %{ declare-user-mode buffer }
+try %{ declare-user-mode window }
+
+map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
+map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
+map global user e       ': neokak-explorer<ret>'       -docstring 'file explorer'
+map global user t       ': neokak-msg terminal<ret>'   -docstring 'terminal (<c-\> hides)'
+map global user f       ': enter-user-mode find<ret>'  -docstring '+find'
+map global user b       ': enter-user-mode buffer<ret>' -docstring '+buffer'
+map global user w       ': enter-user-mode window<ret>' -docstring '+window'
+map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
+map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
+
+map global find f ': neokak-picker files<ret>'        -docstring 'files'
+map global find g ': neokak-picker grep<ret>'         -docstring 'live grep'
+map global find b ': neokak-picker buffers<ret>'      -docstring 'buffers'
+map global find r ': neokak-picker recent<ret>'       -docstring 'recent files'
+map global find c ': neokak-picker colorschemes<ret>' -docstring 'colorschemes'
+map global find p ': neokak-picker pickers<ret>'      -docstring 'all pickers'
+
+map global buffer b ': neokak-picker buffers<ret>' -docstring 'pick buffer'
+map global buffer n ': buffer-next<ret>'           -docstring 'next buffer'
+map global buffer p ': buffer-previous<ret>'       -docstring 'previous buffer'
+map global buffer d ': delete-buffer<ret>'         -docstring 'delete buffer'
+map global buffer D ': delete-buffer!<ret>'        -docstring 'delete buffer (discard changes)'
+
+map global window v ': neokak-window vsplit<ret>' -docstring 'split right'
+map global window s ': neokak-window split<ret>'  -docstring 'split below'
+map global window h ': neokak-window h<ret>'      -docstring 'focus left'
+map global window j ': neokak-window j<ret>'      -docstring 'focus down'
+map global window k ': neokak-window k<ret>'      -docstring 'focus up'
+map global window l ': neokak-window l<ret>'      -docstring 'focus right'
+map global window w ': neokak-window next<ret>'   -docstring 'next pane'
+map global window q ': neokak-window close<ret>'  -docstring 'close pane'
+map global window o ': neokak-window only<ret>'   -docstring 'close other panes'
+
+# Plugin manager
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# In ~/.config/neokak/init.kak:
+#   neokak-plug alexherbo2/auto-pairs.kak %{ enable-auto-pairs }
+# then run :neokak-plug-install once.
+
+declare-option -hidden str-list neokak_plugins
+declare-option -hidden str neokak_plugin_dir %sh{
+    printf %s "${XDG_DATA_HOME:-$HOME/.local/share}/neokak/plugins"
+}
+
+define-command neokak-plug -params 1..2 -docstring %{
+    neokak-plug <repo> [<config>]: declare a plugin
+    <repo> is a git URL or a GitHub user/repo. Once installed (with
+    :neokak-plug-install), its .kak files are sourced and <config> evaluated.
+} %{
+    set-option -add global neokak_plugins %arg{1}
+    evaluate-commands %sh{
+        name=${1##*/}; name=${name%.git}
+        var=$(printf %s "$name" | tr -c 'A-Za-z0-9_' '_')
+        printf 'declare-option -hidden str neokak_plug_cfg_%s\n' "$var"
+        printf 'set-option global neokak_plug_cfg_%s %%arg{2}\n' "$var"
+        if [ -d "$kak_opt_neokak_plugin_dir/$name" ]; then
+            printf "neokak-plug-load '%s'\n" "$name"
+        else
+            printf "neokak-msg notify warn 'plugin %s is not installed: run :neokak-plug-install'\n" "$name"
+        fi
+    }
+}
+
+define-command -hidden neokak-plug-load -params 1 %{
+    evaluate-commands %sh{
+        find -L "$kak_opt_neokak_plugin_dir/$1" -type f -name '*.kak' -not -path '*/.git/*' | sort |
+        while IFS= read -r f; do
+            q=$(printf %s "$f" | sed "s/'/''/g")
+            printf "try %%{ source '%s' } catch %%{ echo -debug %%val{error} }\n" "$q"
+        done
+        var=$(printf %s "$1" | tr -c 'A-Za-z0-9_' '_')
+        printf 'evaluate-commands %%opt{neokak_plug_cfg_%s}\n' "$var"
+    }
+}
+
+define-command neokak-plug-install -docstring 'neokak-plug-install: clone declared plugins that are missing' %{
+    nop %sh{
+        eval set -- "$kak_quoted_opt_neokak_plugins"
+        dir=$kak_opt_neokak_plugin_dir
+        session=$kak_session
+        (
+            mkdir -p "$dir"
+            n=0
+            for repo; do
+                name=${repo##*/}; name=${name%.git}
+                [ -d "$dir/$name" ] && continue
+                case $repo in *://*|git@*) url=$repo ;; *) url=https://github.com/$repo ;; esac
+                if GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 "$url" "$dir/$name"; then
+                    printf "neokak-plug-load '%s'\n" "$name" | kak -p "$session"
+                    "$NEOKAK_BIN" msg notify info "installed $name"
+                    n=$((n + 1))
+                else
+                    "$NEOKAK_BIN" msg notify error "failed to clone $url"
+                fi
+            done
+            [ "$n" -eq 0 ] && "$NEOKAK_BIN" msg notify info "plugins: nothing to install"
+        ) >/dev/null 2>&1 </dev/null &
+    }
+}
+
+define-command neokak-plug-update -docstring 'neokak-plug-update: git pull every installed plugin' %{
+    nop %sh{
+        eval set -- "$kak_quoted_opt_neokak_plugins"
+        dir=$kak_opt_neokak_plugin_dir
+        (
+            n=0
+            for repo; do
+                name=${repo##*/}; name=${name%.git}
+                [ -d "$dir/$name/.git" ] || continue
+                before=$(git -C "$dir/$name" rev-parse HEAD)
+                GIT_TERMINAL_PROMPT=0 git -C "$dir/$name" pull --quiet --ff-only ||
+                    "$NEOKAK_BIN" msg notify error "failed to update $name"
+                [ "$before" != "$(git -C "$dir/$name" rev-parse HEAD)" ] && n=$((n + 1))
+            done
+            "$NEOKAK_BIN" msg notify info "plugins: $n updated (restart to reload)"
+        ) >/dev/null 2>&1 </dev/null &
+    }
+}
+
+define-command neokak-plug-clean -docstring 'neokak-plug-clean: delete installed plugins that are no longer declared' %{
+    nop %sh{
+        eval set -- "$kak_quoted_opt_neokak_plugins"
+        dir=$kak_opt_neokak_plugin_dir
+        declared=" "
+        for repo; do name=${repo##*/}; declared="$declared${name%.git} "; done
+        n=0
+        for d in "$dir"/*/; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            case $declared in *" $name "*) ;; *) rm -rf "$d"; n=$((n + 1)) ;; esac
+        done
+        "$NEOKAK_BIN" msg notify info "plugins: removed $n"
+    }
+}
+
+# User overrides
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+evaluate-commands %sh{
+    f="${XDG_CONFIG_HOME:-$HOME/.config}/neokak/init.kak"
+    [ -f "$f" ] && printf "source '%s'\n" "$(printf %s "$f" | sed "s/'/''/g")"
+}
+
+neokak-sync-current
+neokak-sync-buflist
