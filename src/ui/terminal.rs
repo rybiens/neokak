@@ -26,8 +26,16 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Runs `command` (or the user's shell) in a new pseudo-terminal.
-    pub fn spawn(rows: u16, cols: u16, command: Option<&[String]>, slot: TermSlot, tx: Tx) -> Result<Self> {
+    /// Runs `command` (or the user's shell) in a new pseudo-terminal, with
+    /// environment `env`.
+    pub fn spawn(
+        rows: u16,
+        cols: u16,
+        command: Option<&[String]>,
+        env: &crate::projenv::Env,
+        slot: TermSlot,
+        tx: Tx,
+    ) -> Result<Self> {
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
         let pair = native_pty_system().openpty(size)?;
         let (mut cmd, title) = match command {
@@ -38,6 +46,10 @@ impl Terminal {
             }
             _ => (CommandBuilder::new_default_prog(), "Terminal".to_owned()),
         };
+        cmd.env_clear();
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
         cmd.env("TERM", "xterm-256color");
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
@@ -68,6 +80,15 @@ impl Terminal {
             size: (rows, cols),
             title,
         })
+    }
+
+    /// Whether something other than the shell is running in the foreground
+    /// (a build, a server, an editor).
+    pub fn busy(&self) -> bool {
+        match (self.master.process_group_leader(), self.child.process_id()) {
+            (Some(leader), Some(pid)) => leader as u32 != pid,
+            _ => false,
+        }
     }
 
     pub fn process(&mut self, bytes: &[u8]) {

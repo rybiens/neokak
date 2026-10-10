@@ -12,6 +12,7 @@ pub mod kak;
 pub mod keys;
 pub mod lsp;
 pub mod pane;
+pub mod projenv;
 pub mod recent;
 pub mod session;
 pub mod ui;

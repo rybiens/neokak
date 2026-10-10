@@ -23,6 +23,12 @@ pub enum AppEvent {
         line: usize,
         text: Option<String>,
     },
+    /// A project's environment provider finished.
+    ProjectEnv {
+        dir: std::path::PathBuf,
+        provider: String,
+        env: Result<Option<crate::projenv::Env>, String>,
+    },
     /// Background work (fuzzy matcher, grep) has new results.
     Wake,
     /// Results of a live-grep run, tagged with the query generation.
@@ -36,8 +42,9 @@ pub enum AppEvent {
 /// Which floating terminal an event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TermSlot {
-    /// The toggleable shell (`<space>t`).
-    Shell,
+    /// The toggleable shell (`<space>t`), numbered so that output from a
+    /// replaced shell is ignored.
+    Shell(u64),
     /// A program run in a float until it exits (lazygit, `neokak-float`).
     Tool,
 }

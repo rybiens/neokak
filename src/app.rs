@@ -20,6 +20,7 @@ use crate::kak::rpc::KakEvent;
 use crate::kak::session;
 use crate::keys;
 use crate::pane::{self, Dir, Pane, PaneId, Separator, Split};
+use crate::projenv::{self, Env, Provider};
 use crate::recent::Recent;
 use crate::ui::dashboard::{self, DashAction};
 use crate::ui::draw::put;
@@ -115,6 +116,8 @@ const RESIZE_STEP: i32 = 2;
 pub struct SessionInfo {
     pub name: String,
     pub log: PathBuf,
+    /// neokak's runtime directory, for files Kakoune reads.
+    pub dir: PathBuf,
 }
 
 pub struct App {
@@ -152,7 +155,16 @@ pub struct App {
     tree_focused: bool,
     input: Option<Input>,
     term: Option<FloatTerm>,
+    /// Number of the current shell (see [`TermSlot::Shell`]).
+    term_gen: u64,
     term_visible: bool,
+    /// The environment neokak started with.
+    base_env: Env,
+    /// The environment for programs started for the project: `base_env`, or
+    /// the one the project's provider loaded.
+    env: Env,
+    /// From the `neokak_env_providers` option.
+    env_providers: Vec<Provider>,
     /// A program running in a float until it exits (lazygit, ...).
     tool: Option<FloatTerm>,
     /// The theme options from kak, kept to rebuild the theme when the
@@ -201,7 +213,11 @@ impl App {
             tree_focused: false,
             input: None,
             term: None,
+            term_gen: 0,
             term_visible: false,
+            base_env: projenv::current(),
+            env: projenv::current(),
+            env_providers: Vec::new(),
             tool: None,
             blame: None,
             theme_settings: ("gruvbox".into(), true, Vec::new()),
@@ -337,7 +353,8 @@ impl App {
             AppEvent::Wake => {}
             AppEvent::PtyOutput(slot, bytes) => {
                 let term = match slot {
-                    TermSlot::Shell => &mut self.term,
+                    TermSlot::Shell(g) if g == self.term_gen => &mut self.term,
+                    TermSlot::Shell(_) => return,
                     TermSlot::Tool => &mut self.tool,
                 };
                 if let Some(t) = term {
@@ -361,10 +378,12 @@ impl App {
                     b.text = text;
                 }
             }
-            AppEvent::PtyExited(TermSlot::Shell) => {
+            AppEvent::PtyExited(TermSlot::Shell(g)) if g != self.term_gen => {}
+            AppEvent::PtyExited(TermSlot::Shell(_)) => {
                 self.term = None;
                 self.term_visible = false;
             }
+            AppEvent::ProjectEnv { dir, provider, env } => self.project_env_loaded(&dir, &provider, env),
             AppEvent::GrepResults { generation, lines, done } => {
                 if let Some(p) = &mut self.picker {
                     p.grep_results(generation, lines, done);
@@ -766,6 +785,14 @@ impl App {
                     self.save_session(&args[2..]);
                 }
             }
+            "env-providers" => self.env_providers = Provider::parse_all(&args[1..]),
+            // neokak.kak has loaded: activate the project's environment if
+            // neokak wasn't started inside it.
+            "ready" => {
+                if let Ok(cwd) = std::env::current_dir() {
+                    self.load_project_env(cwd);
+                }
+            }
             "session-restore" => self.restore_session(None),
             "session-autorestore" => {
                 // Only when started without files (the dashboard is up).
@@ -946,12 +973,91 @@ impl App {
             return self.notify("error", &format!("{dir}: {e}"));
         }
         if self.tree.is_some() {
-            self.tree = Some(Tree::new(path));
+            self.tree = Some(Tree::new(path.clone()));
             self.relayout(self.screen);
         }
         self.branch = git_branch();
         self.session_saving = true;
         self.restore_session(Some(format!("change-directory {}", session::quote(dir))));
+        self.reset_terminal();
+        self.load_project_env(std::env::current_dir().unwrap_or(path));
+    }
+
+    /// Loads `dir`'s environment in the background with its provider (or
+    /// goes back to the starting environment for a project without one).
+    fn load_project_env(&mut self, dir: PathBuf) {
+        let Some(provider) = Provider::find(&self.env_providers, &dir).cloned() else {
+            return self.apply_env(self.base_env.clone());
+        };
+        if projenv::active_in(&self.base_env, &dir) {
+            return self.apply_env(self.base_env.clone());
+        }
+        let (tx, base) = (self.tx.clone(), self.base_env.clone());
+        std::thread::spawn(move || {
+            let (done_tx, done) = std::sync::mpsc::channel();
+            let slow_tx = tx.clone();
+            let marker = provider.marker.clone();
+            // Say something if it's slow (the first load builds it).
+            std::thread::spawn(move || {
+                if done.recv_timeout(Duration::from_secs(1)).is_err() {
+                    let msg = format!("Loading the project environment ({marker})…");
+                    let _ = slow_tx.send(AppEvent::Ipc(vec!["notify".into(), "info".into(), msg]));
+                }
+            });
+            let env = provider.load(&dir, &base);
+            let _ = done_tx.send(());
+            let _ = tx.send(AppEvent::ProjectEnv { dir, provider: provider.marker, env });
+        });
+    }
+
+    fn project_env_loaded(&mut self, dir: &Path, provider: &str, env: Result<Option<Env>, String>) {
+        // You may have switched projects again while it loaded.
+        if std::env::current_dir().ok().as_deref() != Some(dir) {
+            return;
+        }
+        match env {
+            Ok(Some(env)) => {
+                if env != self.env {
+                    self.notify("info", &format!("Loaded the project environment ({provider})"));
+                }
+                self.apply_env(env);
+            }
+            Ok(None) => self.apply_env(self.base_env.clone()),
+            Err(e) => {
+                self.notify("warn", &e);
+                self.apply_env(self.base_env.clone());
+            }
+        }
+    }
+
+    /// Switches the programs neokak starts over to `env`: kak-lsp (restarted
+    /// with its language servers) and the terminal.
+    fn apply_env(&mut self, env: Env) {
+        if env == self.env {
+            return;
+        }
+        self.env = env;
+        let file = self.session.dir.join("env.sh");
+        if let Err(e) = std::fs::write(&file, projenv::script(&self.base_env, &self.env)) {
+            return self.notify("error", &format!("{}: {e}", file.display()));
+        }
+        self.eval(&format!("neokak-project-env {}", session::quote(&file.display().to_string())));
+        self.reset_terminal();
+    }
+
+    /// Replaces the shell so it starts over in the current directory and
+    /// environment, unless something is running in it.
+    fn reset_terminal(&mut self) {
+        let Some(term) = &self.term else { return };
+        if term.busy() {
+            return self.notify("warn", "The terminal is busy; it keeps its old directory and environment");
+        }
+        let visible = self.term_visible;
+        self.term = None;
+        self.term_visible = false;
+        if visible {
+            self.toggle_terminal();
+        }
     }
 
     /// Runs a program in a floating terminal until it exits.
@@ -965,7 +1071,7 @@ impl App {
         }
         let inner = FloatTerm::area(self.screen);
         let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
-        match FloatTerm::spawn(rows, cols, Some(command), TermSlot::Tool, self.tx.clone()) {
+        match FloatTerm::spawn(rows, cols, Some(command), &self.env, TermSlot::Tool, self.tx.clone()) {
             Ok(t) => self.tool = Some(t),
             Err(e) => self.notify("error", &format!("{prog}: {e}")),
         }
@@ -979,7 +1085,8 @@ impl App {
         if self.term.is_none() {
             let inner = FloatTerm::area(self.screen);
             let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
-            match FloatTerm::spawn(rows, cols, None, TermSlot::Shell, self.tx.clone()) {
+            self.term_gen += 1;
+            match FloatTerm::spawn(rows, cols, None, &self.env, TermSlot::Shell(self.term_gen), self.tx.clone()) {
                 Ok(t) => self.term = Some(t),
                 Err(e) => return self.notify("error", &format!("terminal: {e}")),
             }
