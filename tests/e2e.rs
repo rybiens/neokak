@@ -569,3 +569,51 @@ fn sessions_can_be_forgotten() {
     assert!(!file.exists(), "not saved again this run");
     quit(nk, &sandbox);
 }
+
+#[test]
+fn indented_blocks_fold_and_unfold() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    std::fs::write(
+        sandbox.project.join("f.py"),
+        "def outer():\n    one = 1\n    two = 2\n    if one:\n        three = 3\n\nafter = 0\n",
+    )
+    .unwrap();
+    let nk = Neokak::spawn(&sandbox, &["--clean", "f.py"]);
+    nk.wait_for("file", |t| t.contains("after = 0") && t.contains("NORMAL"));
+    nk.send(" zc");
+    nk.wait_for("folded", |t| t.contains("def outer(): ··· 4 lines") && !t.contains("two = 2"));
+    // Moving the cursor into the fold shows its lines; leaving folds it again.
+    nk.send("j");
+    nk.wait_for("revealed under the cursor", |t| t.contains("two = 2"));
+    nk.send("ge");
+    nk.wait_for("folded again", |t| t.contains("··· 4 lines"));
+    nk.send(" zR");
+    nk.wait_for("unfolded", |t| t.contains("two = 2") && !t.contains("···"));
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn references_open_with_context() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    let root = sandbox.project.display().to_string();
+    nk.send(&format!(
+        ":neokak-lsp context:References %{{lsp-show-goto-buffer *goto* lsp-goto '{root}' 'notes.txt:2:1: line two'}}\r"
+    ));
+    nk.wait_for("context view", |t| {
+        t.contains("*references*")
+            && t.contains("notes.txt-1-hello from neokak")
+            && t.contains("notes.txt:2:1:line two")
+    });
+    // <ret> on the reference jumps to it.
+    nk.send("j");
+    nk.send("\r");
+    nk.wait_for("jumped", |t| status(t).contains("notes.txt") && status(t).contains("2:1"));
+    quit(nk, &sandbox);
+}

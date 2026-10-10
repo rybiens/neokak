@@ -254,6 +254,203 @@ define-command neokak-float -params 1.. -docstring %{
     neokak-msg float %arg{@}
 }
 
+# Tree-sitter
+# ‾‾‾‾‾‾‾‾‾‾‾
+# kak-tree-sitter (when installed) provides syntax highlighting and
+# syntax-aware text objects. Keep the user's setup if their kakrc started it.
+
+try %{ nop %opt{tree_sitter_lang} } catch %{
+    evaluate-commands %sh{
+        command -v kak-tree-sitter >/dev/null 2>&1 && kak-tree-sitter -dks --init "$kak_session"
+    }
+}
+
+# kak-tree-sitter leaves its ts_* faces at "default", expecting a tree-sitter
+# colorscheme; link them to Kakoune's standard faces so any colorscheme works.
+declare-option -docstring "link kak-tree-sitter's faces to the colorscheme's standard faces" \
+    bool neokak_ts_faces true
+define-command -hidden neokak-ts-faces %{
+    set-face global ts_attribute attribute
+    set-face global ts_comment comment
+    set-face global ts_constant value
+    set-face global ts_constant_builtin value
+    set-face global ts_constant_character value
+    set-face global ts_constant_numeric value
+    set-face global ts_constructor type
+    set-face global ts_error Error
+    set-face global ts_function function
+    set-face global ts_function_builtin builtin
+    set-face global ts_function_macro meta
+    set-face global ts_function_method function
+    set-face global ts_include keyword
+    set-face global ts_keyword keyword
+    set-face global ts_keyword_operator operator
+    set-face global ts_label meta
+    set-face global ts_namespace module
+    set-face global ts_operator operator
+    set-face global ts_special meta
+    set-face global ts_string string
+    set-face global ts_string_escape meta
+    set-face global ts_string_regexp meta
+    set-face global ts_tag keyword
+    set-face global ts_type type
+    set-face global ts_type_builtin type
+    set-face global ts_variable variable
+    set-face global ts_variable_builtin builtin
+    set-face global ts_variable_other_member variable
+    set-face global ts_variable_parameter variable
+    set-face global ts_markup_heading header
+    set-face global ts_markup_bold +b
+    set-face global ts_markup_italic +i
+    set-face global ts_markup_link_url link
+    set-face global ts_markup_raw mono
+}
+try %{
+    nop %opt{tree_sitter_lang}
+    evaluate-commands %sh{ [ "$kak_opt_neokak_ts_faces" = true ] && echo neokak-ts-faces }
+    # Object-mode text objects: <a-a>f selects the function around the
+    # cursor, <a-a>t the type (struct, class, impl); <a-i> their bodies.
+    map global object f '<a-semicolon>tree-sitter-object-text-objects function<ret>' -docstring 'function (tree-sitter)'
+    map global object t '<a-semicolon>tree-sitter-object-text-objects class<ret>'    -docstring 'type (tree-sitter)'
+}
+
+# Folding
+# ‾‾‾‾‾‾‾
+# Kakoune has no folding, so folds are drawn with a replace-ranges
+# highlighter: a fold's lines collapse into "··· N lines" after its first
+# line, and open again while the cursor is inside them.
+
+declare-option -hidden range-specs neokak_folds
+declare-option -hidden str neokak_fold_from
+declare-option -hidden str neokak_fold_a
+declare-option -hidden str neokak_fold_b
+set-face global NeokakFold comment
+add-highlighter global/neokak-folds replace-ranges neokak_folds
+hook global BufCreate .* %{ set-option buffer neokak_folds %val{timestamp} }
+evaluate-commands -buffer * %{ set-option buffer neokak_folds %val{timestamp} }
+
+# Folds lines <first> to <last>: the first line stays, the rest collapse.
+define-command -hidden neokak-fold-lines -params 2 %{
+    evaluate-commands -draft %{
+        select "%arg{1}.1,%arg{1}.1"
+        execute-keys x
+        set-option window neokak_fold_a %val{selection_desc}
+        select "%arg{2}.1,%arg{2}.1"
+        execute-keys x
+        set-option window neokak_fold_b %val{selection_desc}
+    }
+    evaluate-commands %sh{
+        start=${kak_opt_neokak_fold_a##*,}    # the first line's newline
+        end=${kak_opt_neokak_fold_b##*,}      # the last line's newline
+        end_line=${end%.*}; end_col=$((${end#*.} - 1))
+        if [ "$2" -le "$1" ] || [ "$end_col" -lt 1 ]; then echo 'fail nothing to fold'; exit; fi
+        echo "set-option -add buffer neokak_folds '$start,$end_line.$end_col|{NeokakFold} ··· $(($2 - $1)) lines'"
+        # Keep the cursor on the first line, outside the hidden part.
+        echo "select $1.1,$1.1"
+    }
+}
+
+# Indentation folds: the block indented deeper than the cursor line (or the
+# block the cursor is in), minus trailing blank lines.
+define-command -hidden neokak-fold-indent %{
+    evaluate-commands %sh{
+        file=$(mktemp "${TMPDIR:-/tmp}/neokak-fold.XXXXXX")
+        echo "evaluate-commands -draft -no-hooks %{ write -force '$file' }"
+        echo "neokak-fold-indent-file '$file'"
+    }
+}
+define-command -hidden neokak-fold-indent-file -params 1 %{
+    evaluate-commands %sh{
+        range=$(awk -v c="$kak_cursor_line" '
+            function indent(s) { match(s, /^[ \t]*/); return RLENGTH }
+            { blank[NR] = ($0 ~ /^[ \t]*$/); ind[NR] = indent($0) }
+            END {
+                n = c + 1; while (n <= NR && blank[n]) n++
+                if (n <= NR && !blank[c] && ind[n] > ind[c]) h = c
+                else {
+                    h = c - 1; while (h >= 1 && (blank[h] || ind[h] >= ind[c])) h--
+                    if (h < 1) exit
+                }
+                e = h
+                for (i = h + 1; i <= NR; i++) { if (blank[i]) continue; if (ind[i] <= ind[h]) break; e = i }
+                if (e > h) print h, e
+            }' "$1")
+        rm -f "$1"
+        if [ -n "$range" ]; then echo "neokak-fold-lines $range"; else echo 'fail no indented block here'; fi
+    }
+}
+
+# Run by the frontend after it typed <a-a>f for kak-tree-sitter (which
+# answers asynchronously): fold the function that got selected, or fall back
+# to indentation if there was none.
+define-command -hidden neokak-fold-finish %{
+    evaluate-commands %sh{
+        set -- $kak_selection_desc
+        anchor=${1%,*}; cursor=${1#*,}
+        a=${anchor%.*}; b=${cursor%.*}
+        if [ "$a" != "$b" ]; then
+            if [ "$a" -lt "$b" ]; then echo "neokak-fold-lines $a $b"; else echo "neokak-fold-lines $b $a"; fi
+        else
+            echo 'select %opt{neokak_fold_from}; neokak-fold-indent'
+        fi
+    }
+}
+
+define-command neokak-fold -docstring 'fold the function (tree-sitter) or indented block at the cursor' %{
+    set-option window neokak_fold_from %val{selections_desc}
+    evaluate-commands %sh{
+        if [ -n "$kak_opt_tree_sitter_lang" ]; then echo 'neokak-msg fold-ts'; else echo neokak-fold-indent; fi
+    }
+}
+
+define-command neokak-unfold -docstring 'open the folds at the cursor line' %{
+    evaluate-commands %sh{
+        eval set -- "$kak_quoted_opt_neokak_folds"
+        ts=$1; shift
+        kept=""
+        for spec; do
+            range=${spec%%|*}; first=${range%%.*}; last=${range#*,}; last=${last%%.*}
+            if [ "$kak_cursor_line" -ge "$first" ] && [ "$kak_cursor_line" -le "$last" ]; then continue; fi
+            kept="$kept '$(printf %s "$spec" | sed "s/'/''/g")'"
+        done
+        echo "set-option buffer neokak_folds $ts $kept"
+    }
+}
+
+define-command neokak-fold-toggle -docstring 'fold or unfold at the cursor' %{
+    evaluate-commands %sh{
+        eval set -- "$kak_quoted_opt_neokak_folds"
+        shift
+        for spec; do
+            range=${spec%%|*}; first=${range%%.*}; last=${range#*,}; last=${last%%.*}
+            if [ "$kak_cursor_line" -ge "$first" ] && [ "$kak_cursor_line" -le "$last" ]; then
+                echo neokak-unfold; exit
+            fi
+        done
+        echo neokak-fold
+    }
+}
+
+define-command neokak-unfold-all -docstring 'open every fold in the buffer' %{
+    set-option buffer neokak_folds %val{timestamp}
+}
+
+# Function and symbol navigation
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# kak-lsp's symbol navigation, or kak-tree-sitter's when there's no LSP.
+
+define-command -hidden neokak-goto-symbol -params 2 %{
+    try %{
+        nop %opt{lsp_servers}
+        evaluate-commands "lsp-%arg{1}-%arg{2}"
+    } catch %{
+        evaluate-commands %sh{
+            if [ "$1" = next ]; then mode=search_next; else mode=search_prev; fi
+            echo "tree-sitter-text-objects function.around $mode"
+        }
+    }
+}
+
 # Sessions
 # ‾‾‾‾‾‾‾‾
 # The files open in each project directory (and the cursor in each) are
@@ -344,6 +541,7 @@ try %{ declare-user-mode window }
 try %{ declare-user-mode search }
 try %{ declare-user-mode git }
 try %{ declare-user-mode session }
+try %{ declare-user-mode fold }
 
 map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
 map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
@@ -355,6 +553,11 @@ map global user w       ': enter-user-mode window<ret>' -docstring '+window'
 map global user s       ': enter-user-mode search<ret>' -docstring '+search (LSP)'
 map global user g       ': enter-user-mode git<ret>'    -docstring '+git'
 map global user q       ': enter-user-mode session<ret>' -docstring '+session'
+map global user z       ': enter-user-mode fold<ret>'    -docstring '+fold'
+map global user j       ': neokak-goto-symbol next function<ret>'     -docstring 'next function'
+map global user k       ': neokak-goto-symbol previous function<ret>' -docstring 'previous function'
+map global user J       ': neokak-goto-symbol next symbol<ret>'       -docstring 'next symbol'
+map global user K       ': neokak-goto-symbol previous symbol<ret>'   -docstring 'previous symbol'
 map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
 map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
 
@@ -390,6 +593,7 @@ map global window =       ': neokak-window equalize<ret>'     -docstring 'equal 
 map global search s ': lsp-document-symbol<ret>'                           -docstring 'document symbols'
 map global search S ': lsp-workspace-symbol '                              -docstring 'workspace symbols (type a query)'
 map global search r ': neokak-lsp References lsp-references<ret>'          -docstring 'references'
+map global search R ': neokak-lsp context:References lsp-references<ret>'  -docstring 'references with context'
 map global search d ': lsp-diagnostics<ret>'                               -docstring 'diagnostics'
 map global search i ': neokak-lsp Implementations lsp-implementation<ret>' -docstring 'implementations'
 map global search t ': neokak-lsp %{Type Definitions} lsp-type-definition<ret>' -docstring 'type definition'
@@ -405,6 +609,11 @@ map global git d ': git diff %val{buffile}<ret>'             -docstring 'diff of
 map global session s ': neokak-session-restore<ret>'   -docstring 'restore this project'
 map global session p ': neokak-picker projects<ret>'   -docstring 'switch project'
 map global session d ': neokak-session-forget<ret>'    -docstring "forget this project's session"
+
+map global fold z ': neokak-fold-toggle<ret>' -docstring 'toggle fold'
+map global fold c ': neokak-fold<ret>'        -docstring 'fold'
+map global fold o ': neokak-unfold<ret>'      -docstring 'unfold'
+map global fold R ': neokak-unfold-all<ret>'  -docstring 'unfold all'
 
 # Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
 map global normal <c-right> ': neokak-window resize-right<ret>'

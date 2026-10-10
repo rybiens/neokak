@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use crate::ui::picker::{location, parse_grep};
+use crate::ui::picker::{location, parse_grep, parse_location};
 
 /// Picker title for a kak-lsp result buffer.
 pub fn title(bufname: &str, filetype: &str) -> String {
@@ -50,10 +50,67 @@ pub fn items(filetype: &str, root: &Path, content: &str) -> Vec<String> {
         .collect()
 }
 
+/// A ripgrep `-C`-style listing of locations with `context` lines around
+/// each: `path:line:col:text` for the locations themselves (jumpable in a
+/// Kakoune grep buffer) and `path-line-text` for context, with `--` between
+/// separate chunks. Paths are shown relative to `cwd`.
+pub fn context_view(items: &[String], cwd: &Path, context: usize) -> String {
+    // Group by file, keeping first-seen order.
+    let mut files: Vec<(&str, Vec<(usize, usize)>)> = Vec::new();
+    for item in items {
+        let Some((_, (path, line, col))) = parse_location(item) else { continue };
+        match files.iter_mut().find(|(p, _)| *p == path) {
+            Some((_, locs)) => locs.push((line, col)),
+            None => files.push((path, vec![(line, col)])),
+        }
+    }
+    let mut out = String::new();
+    for (path, mut locs) in files {
+        locs.sort_unstable();
+        locs.dedup_by_key(|l| l.0);
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        let lines: Vec<&str> = text.lines().collect();
+        let shown = Path::new(path).strip_prefix(cwd).map_or_else(|_| path.to_owned(), |p| p.display().to_string());
+        let mut last_printed = 0;
+        for (i, &(line, col)) in locs.iter().enumerate() {
+            let from = line.saturating_sub(context).max(1).max(last_printed + 1);
+            let next = locs.get(i + 1).map_or(usize::MAX, |l| l.0);
+            let to = (line + context).min(lines.len()).min(next.saturating_sub(1).max(line));
+            if !out.is_empty() && from > last_printed + 1 {
+                out.push_str("--\n");
+            }
+            for n in from..=to {
+                let text = lines.get(n - 1).copied().unwrap_or_default();
+                if n == line {
+                    out.push_str(&format!("{shown}:{n}:{col}:{text}\n"));
+                } else {
+                    out.push_str(&format!("{shown}-{n}-{text}\n"));
+                }
+            }
+            last_printed = to;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::picker::parse_location;
+
+    #[test]
+    fn context_view_shows_surrounding_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let src: String = (1..=12).map(|i| format!("line {i}\n")).collect();
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, src).unwrap();
+        let f = file.display().to_string();
+        let items = [location("x", &f, 3, 2), location("y", &f, 4, 1), location("z", &f, 10, 5)];
+        let view = context_view(&items, dir.path(), 1);
+        assert_eq!(
+            view,
+            "a.rs-2-line 2\na.rs:3:2:line 3\na.rs:4:1:line 4\na.rs-5-line 5\n--\na.rs-9-line 9\na.rs:10:5:line 10\na.rs-11-line 11\n"
+        );
+    }
 
     #[test]
     fn titles() {

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Tree-sitter: when kak-tree-sitter is installed, neokak starts it, links its
+  faces to the colorscheme's standard faces, and maps `<a-a>f`/`<a-a>t` to
+  function and type text objects.
+- Folding (`<space>z`): fold the function around the cursor (tree-sitter) or
+  the indented block; folds open while the cursor is inside them.
+- `<space>j`/`<space>k` jump to the next/previous function, `<space>J`/
+  `<space>K` to the next/previous symbol (kak-lsp, or kak-tree-sitter).
+- `<space>sR` shows every reference with the code around it in a
+  `*references*` buffer.
 - Project sessions: the files open in each project directory and the cursor
   in each are saved as you work. Restore them from the dashboard (`s`) or
   with `<space>qs`, switch projects with `<space>qp` (or `p` on the
