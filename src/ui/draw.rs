@@ -60,14 +60,15 @@ pub fn atom_segs(atoms: &[Atom], base: &Face, bg: Option<Color>) -> Vec<Seg> {
         .collect()
 }
 
-/// Lifts foregrounds too dark to read on a dark float (colorschemes tune
-/// faces like MenuInfo for Kakoune's own menu background, not ours).
-pub fn readable(mut segs: Vec<Seg>, fallback: Color) -> Vec<Seg> {
+/// Replaces foregrounds that would vanish on the theme's float background
+/// (colorschemes tune faces like MenuInfo for Kakoune's own menu
+/// background, not ours): too dark on dark themes, too light on light ones.
+pub fn readable(mut segs: Vec<Seg>, theme: &Theme) -> Vec<Seg> {
     for (_, style) in &mut segs {
         if let Some(Color::Rgb(r, g, b)) = style.fg {
             let luma = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
-            if luma < 70.0 {
-                style.fg = Some(fallback);
+            if (theme.dark && luma < 70.0) || (!theme.dark && luma > 200.0) {
+                style.fg = Some(theme.fg_dim);
             }
         }
     }

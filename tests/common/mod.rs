@@ -134,6 +134,22 @@ impl Neokak {
         self.screen.lock().unwrap().screen().contents()
     }
 
+    /// Background color of one screen cell.
+    pub fn bg_at(&self, row: u16, col: u16) -> vt100::Color {
+        self.screen.lock().unwrap().screen().cell(row, col).map_or(vt100::Color::Default, |c| c.bgcolor())
+    }
+
+    /// Waits until a cell's background becomes `want`.
+    pub fn wait_bg(&self, what: &str, row: u16, col: u16, want: vt100::Color) {
+        let deadline = Instant::now() + TIMEOUT;
+        while self.bg_at(row, col) != want {
+            if Instant::now() > deadline {
+                panic!("timed out waiting for {what}: cell ({row},{col}) is {:?}, want {want:?}", self.bg_at(row, col));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Waits until `pred` holds for the screen text; panics with the screen
     /// on timeout.
     pub fn wait_for(&self, what: &str, pred: impl Fn(&str) -> bool) -> String {

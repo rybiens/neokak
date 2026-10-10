@@ -29,7 +29,7 @@ use crate::ui::popup::{self, Toast};
 use crate::ui::statusline::{self, ModeLine, StatusContext};
 use crate::ui::tabline::{self, Hit};
 use crate::ui::terminal::Terminal as FloatTerm;
-use crate::ui::theme::Theme;
+use crate::ui::theme::{THEMES, Theme};
 use crate::ui::tree::{Tree, TreeAction};
 
 pub const MAIN_CLIENT: &str = "main";
@@ -486,6 +486,14 @@ impl App {
                 let def = PickerDef { title: arg(2).to_owned(), source: arg(3).to_owned(), accept: arg(4).to_owned() };
                 self.pickers.insert(arg(1).to_owned(), def);
             }
+            "theme" => {
+                let (theme, errors) =
+                    Theme::from_settings(arg(1), arg(2) != "false", args.get(3..).unwrap_or_default());
+                self.theme = theme;
+                for e in errors {
+                    self.notify("error", &e);
+                }
+            }
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),
@@ -538,8 +546,13 @@ impl App {
                 Picker::list("Buffers", bufs, Accept::Buffer, tx)
             }
             "recent" => Picker::list("Recent Files", self.recent.files.clone(), Accept::Edit, tx),
+            "themes" => {
+                let names = THEMES.iter().map(|s| s.to_string()).collect();
+                Picker::list("Themes", names, Accept::Command("neokak-theme".into()), tx)
+            }
             "pickers" => {
-                let mut names: Vec<String> = ["files", "grep", "buffers", "recent"].map(String::from).to_vec();
+                let mut names: Vec<String> =
+                    ["files", "grep", "buffers", "recent", "themes"].map(String::from).to_vec();
                 names.extend(self.pickers.keys().cloned());
                 Picker::list("Pickers", names, Accept::Picker, tx)
             }
@@ -795,11 +808,11 @@ impl App {
                 (_, Some(c)) => popup::render_prompt_menu(buf, c, screen, m, theme),
             });
         if let Some(info) = &focused.info {
-            let whichkey = matches!(info.style.as_str(), "prompt" | "modal") && !prompt;
-            if whichkey {
+            if !prompt && popup::is_key_help(info) {
                 popup::render_whichkey(buf, layout.main, info, theme, icons);
             } else {
-                popup::render_info(buf, focus_rect, screen, info, menu_rect, cmd_rect, theme);
+                let at = popup::InfoAnchors { menu: menu_rect, cmdline: cmd_rect, cursor: focused.editor.cursor };
+                popup::render_info(buf, focus_rect, screen, info, at, theme);
             }
         }
         popup::render_toasts(buf, layout.main, &self.toasts, theme, icons);

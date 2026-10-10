@@ -4,9 +4,9 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::kak::rpc::Face;
 
-/// Palette for everything neokak draws itself (gruvbox dark, to match the
-/// default Kakoune colorscheme pairing; editor text keeps Kakoune's faces).
-#[derive(Debug, Clone)]
+/// Palette for everything neokak draws itself. Text inside the editor keeps
+/// the Kakoune colorscheme's faces.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
     pub bg: Color,
     /// Floating windows. `Reset` keeps them on the terminal background,
@@ -26,31 +26,156 @@ pub struct Theme {
     pub purple: Color,
     pub aqua: Color,
     pub orange: Color,
+    /// Light text on dark backgrounds (affects contrast fixes).
+    pub dark: bool,
 }
+
+/// Built-in theme names, in picker order.
+pub const THEMES: &[&str] = &["gruvbox", "gruvbox-light", "tokyonight", "catppuccin", "nord", "onedark"];
+
+/// Colors a user can override, as `name=color`.
+pub const COLOR_NAMES: &[&str] = &[
+    "bg_float", "bg_bar", "bg_alt", "bg_sel", "fg", "fg_dim", "border", "red", "green", "yellow", "blue", "purple",
+    "aqua", "orange",
+];
 
 impl Default for Theme {
     fn default() -> Self {
-        Self {
-            bg: Color::Reset,
-            bg_float: Color::Reset,
-            bg_bar: rgb(0x1d2021),
-            bg_alt: rgb(0x3c3836),
-            bg_sel: rgb(0x504945),
-            fg: rgb(0xebdbb2),
-            fg_dim: rgb(0x928374),
-            border: rgb(0x665c54),
-            red: rgb(0xfb4934),
-            green: rgb(0xb8bb26),
-            yellow: rgb(0xfabd2f),
-            blue: rgb(0x83a598),
-            purple: rgb(0xd3869b),
-            aqua: rgb(0x8ec07c),
-            orange: rgb(0xfe8019),
-        }
+        Self::named("gruvbox").unwrap().transparent(true)
     }
 }
 
+/// float, bar, alt, sel, fg, fg_dim, border, red, green, yellow, blue,
+/// purple, aqua, orange
+type Palette = [u32; 14];
+
+fn palette(name: &str) -> Option<(Palette, bool)> {
+    Some(match name {
+        "gruvbox" => (
+            [
+                0x1d2021, 0x1d2021, 0x3c3836, 0x504945, 0xebdbb2, 0x928374, 0x665c54, 0xfb4934, 0xb8bb26, 0xfabd2f,
+                0x83a598, 0xd3869b, 0x8ec07c, 0xfe8019,
+            ],
+            true,
+        ),
+        "gruvbox-light" => (
+            [
+                0xf9f5d7, 0xf2e5bc, 0xebdbb2, 0xd5c4a1, 0x3c3836, 0x928374, 0xbdae93, 0x9d0006, 0x79740e, 0xb57614,
+                0x076678, 0x8f3f71, 0x427b58, 0xaf3a03,
+            ],
+            false,
+        ),
+        "tokyonight" => (
+            [
+                0x16161e, 0x16161e, 0x292e42, 0x283457, 0xc0caf5, 0x565f89, 0x3b4261, 0xf7768e, 0x9ece6a, 0xe0af68,
+                0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xff9e64,
+            ],
+            true,
+        ),
+        "catppuccin" => (
+            [
+                0x181825, 0x181825, 0x313244, 0x45475a, 0xcdd6f4, 0x7f849c, 0x585b70, 0xf38ba8, 0xa6e3a1, 0xf9e2af,
+                0x89b4fa, 0xcba6f7, 0x94e2d5, 0xfab387,
+            ],
+            true,
+        ),
+        "nord" => (
+            [
+                0x2e3440, 0x2e3440, 0x3b4252, 0x434c5e, 0xd8dee9, 0x616e88, 0x4c566a, 0xbf616a, 0xa3be8c, 0xebcb8b,
+                0x81a1c1, 0xb48ead, 0x88c0d0, 0xd08770,
+            ],
+            true,
+        ),
+        "onedark" => (
+            [
+                0x21252b, 0x21252b, 0x2c313c, 0x3e4451, 0xabb2bf, 0x5c6370, 0x3e4452, 0xe06c75, 0x98c379, 0xe5c07b,
+                0x61afef, 0xc678dd, 0x56b6c2, 0xd19a66,
+            ],
+            true,
+        ),
+        _ => return None,
+    })
+}
+
 impl Theme {
+    /// A built-in theme, with solid popup backgrounds.
+    pub fn named(name: &str) -> Option<Self> {
+        let ([float, bar, alt, sel, fg, fg_dim, border, red, green, yellow, blue, purple, aqua, orange], dark) =
+            palette(name)?;
+        Some(Self {
+            bg: Color::Reset,
+            bg_float: rgb(float),
+            bg_bar: rgb(bar),
+            bg_alt: rgb(alt),
+            bg_sel: rgb(sel),
+            fg: rgb(fg),
+            fg_dim: rgb(fg_dim),
+            border: rgb(border),
+            red: rgb(red),
+            green: rgb(green),
+            yellow: rgb(yellow),
+            blue: rgb(blue),
+            purple: rgb(purple),
+            aqua: rgb(aqua),
+            orange: rgb(orange),
+            dark,
+        })
+    }
+
+    /// Draws popups on the terminal background instead of a solid color.
+    pub fn transparent(mut self, on: bool) -> Self {
+        if on {
+            self.bg_float = Color::Reset;
+        }
+        self
+    }
+
+    /// Overrides one color, e.g. `set_color("blue", "#7aa2f7")`.
+    pub fn set_color(&mut self, name: &str, value: &str) -> Result<(), String> {
+        let color = parse_color(value).ok_or_else(|| format!("bad color {value:?} for {name}"))?;
+        let slot = match name {
+            "bg_float" => &mut self.bg_float,
+            "bg_bar" => &mut self.bg_bar,
+            "bg_alt" => &mut self.bg_alt,
+            "bg_sel" => &mut self.bg_sel,
+            "fg" => &mut self.fg,
+            "fg_dim" => &mut self.fg_dim,
+            "border" => &mut self.border,
+            "red" => &mut self.red,
+            "green" => &mut self.green,
+            "yellow" => &mut self.yellow,
+            "blue" => &mut self.blue,
+            "purple" => &mut self.purple,
+            "aqua" => &mut self.aqua,
+            "orange" => &mut self.orange,
+            _ => return Err(format!("unknown theme color {name:?} (one of: {})", COLOR_NAMES.join(", "))),
+        };
+        *slot = color;
+        Ok(())
+    }
+
+    /// Builds a theme from neokak's options: the theme name, transparency,
+    /// and `name=color` overrides. Errors name every bad setting; the theme
+    /// is still built from the valid ones.
+    pub fn from_settings(name: &str, transparent: bool, overrides: &[String]) -> (Self, Vec<String>) {
+        let mut errors = Vec::new();
+        let base = Self::named(name).unwrap_or_else(|| {
+            errors.push(format!("unknown theme {name:?} (one of: {})", THEMES.join(", ")));
+            Self::named("gruvbox").unwrap()
+        });
+        let mut theme = base.transparent(transparent);
+        for o in overrides.iter().filter(|o| !o.is_empty()) {
+            let res = match o.split_once('=') {
+                Some((k, v)) => theme.set_color(k.trim(), v.trim()),
+                None => Err(format!("theme override {o:?} should look like name=color")),
+            };
+            if let Err(e) = res {
+                errors.push(e);
+            }
+        }
+        (theme, errors)
+    }
+
     pub fn float(&self) -> Style {
         Style::new().fg(self.fg).bg(self.bg_float)
     }
@@ -159,6 +284,41 @@ mod tests {
             bg: bg.into(),
             underline: String::new(),
             attributes: attrs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn every_theme_builds() {
+        for name in THEMES {
+            let t = Theme::named(name).unwrap_or_else(|| panic!("{name} missing"));
+            assert_ne!(t.bg_float, Color::Reset, "{name}: solid popups unless transparent");
+            assert_eq!(t.clone().transparent(true).bg_float, Color::Reset);
+        }
+        assert!(!Theme::named("gruvbox-light").unwrap().dark);
+        assert!(Theme::named("nope").is_none());
+    }
+
+    #[test]
+    fn settings_apply_overrides_and_report_errors() {
+        let overrides = ["blue=#7aa2f7", "bg_sel=rgb:3b4261", "pink=#ff00ff", "fg=notacolor", "junk"].map(String::from);
+        let (t, errors) = Theme::from_settings("tokyonight", false, &overrides);
+        assert_eq!(t.blue, Color::Rgb(0x7a, 0xa2, 0xf7));
+        assert_eq!(t.bg_sel, Color::Rgb(0x3b, 0x42, 0x61));
+        assert_eq!(t.bg_float, Theme::named("tokyonight").unwrap().bg_float, "not transparent");
+        assert_eq!(errors.len(), 3, "{errors:?}");
+
+        let (t, errors) = Theme::from_settings("nope", true, &[]);
+        assert_eq!(t, Theme::default(), "unknown names fall back to transparent gruvbox");
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn rc_completions_list_every_theme() {
+        let line = crate::RC.lines().find(|l| l.contains("printf '%s\\n' gruvbox")).expect("neokak-theme candidates");
+        let listed: Vec<&str> = line.split_whitespace().skip(2).collect();
+        assert_eq!(listed, THEMES, "keep neokak-theme's completions in rc/neokak.kak in sync");
+        for name in COLOR_NAMES {
+            assert!(crate::RC.contains(name), "rc docstring should mention {name}");
         }
     }
 
