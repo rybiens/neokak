@@ -1,6 +1,7 @@
 //! The json-ui Kakoune client process that renders into neokak.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
@@ -28,6 +29,11 @@ impl KakClient {
     pub fn spawn(cmd: Command, session: String, stderr_log: &Path, pane: PaneId, tx: Tx) -> Result<Self> {
         let mut cmd = cmd;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(stderr_log)?;
+        // Keep Kakoune out of the terminal's process group: when the window
+        // is closed, the terminal sends SIGHUP to that group, and Kakoune
+        // would die without running its KakEnd hooks (orphaning kak-lsp).
+        // neokak gets the SIGHUP instead and ends the session properly.
+        cmd.process_group(0);
         let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

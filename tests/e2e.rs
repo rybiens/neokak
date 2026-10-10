@@ -409,14 +409,8 @@ fn splits_show_a_title_bar_per_pane() {
     quit(nk, &sandbox);
 }
 
-#[test]
-fn quitting_lets_kakoune_finish_its_shutdown_hooks() {
-    if !have_kak() {
-        return;
-    }
-    // kak-lsp stops its language servers from a KakEnd hook; if neokak
-    // kills Kakoune during that, the servers are orphaned.
-    let sandbox = Sandbox::new();
+/// Configures a slow KakEnd hook that creates a marker file when it finishes.
+fn slow_kakend_hook(sandbox: &Sandbox) -> std::path::PathBuf {
     let marker = sandbox.home.join("kakend-done");
     let config = sandbox.home.join(".config/neokak");
     std::fs::create_dir_all(&config).unwrap();
@@ -425,6 +419,31 @@ fn quitting_lets_kakoune_finish_its_shutdown_hooks() {
         format!("hook global KakEnd .* %{{ nop %sh{{ sleep 1; touch '{}' }} }}\n", marker.display()),
     )
     .unwrap();
+    marker
+}
+
+#[test]
+fn closing_the_window_lets_kakoune_finish_its_shutdown_hooks() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let marker = slow_kakend_hook(&sandbox);
+    let mut nk = open_notes(&sandbox);
+    nk.hangup();
+    nk.wait_exit();
+    common::wait_file(&marker, |_| marker.exists());
+}
+
+#[test]
+fn quitting_lets_kakoune_finish_its_shutdown_hooks() {
+    if !have_kak() {
+        return;
+    }
+    // kak-lsp stops its language servers from a KakEnd hook; if neokak
+    // kills Kakoune during that, the servers are orphaned.
+    let sandbox = Sandbox::new();
+    let marker = slow_kakend_hook(&sandbox);
     let mut nk = open_notes(&sandbox);
     nk.send(":q\r");
     assert!(nk.wait_exit());
