@@ -34,6 +34,15 @@ model, your kakrc and your Kakoune plugins.
   own
 - **LSP pickers**: document symbols, references, diagnostics, implementations
   and other kak-lsp result lists open in a picker with a preview
+- **Tree-sitter** (with [kak-tree-sitter](https://git.sr.ht/~hadronized/kak-tree-sitter)):
+  syntax highlighting in your colorscheme's colors and function/type text
+  objects
+- **Folding**: fold the function (tree-sitter) or indented block at the
+  cursor; folded lines open while the cursor is inside them
+- **Function and symbol navigation**: jump to the next or previous function
+  or symbol
+- **References with context**: every reference with the code around it, in
+  one navigable buffer
 - **Git**: live change markers in the gutter, hunk navigation, inline blame
   for the cursor line, a changed-files picker, and lazygit (or any tool) in a
   floating terminal
@@ -67,6 +76,9 @@ Windows is not supported.
   - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for live grep
   - `git` for the branch in the statusline, change markers, blame, git status
     in the explorer, and the plugin manager
+  - [kak-tree-sitter](https://git.sr.ht/~hadronized/kak-tree-sitter) for
+    tree-sitter highlighting, text objects and function folds (see
+    [Tree-sitter](#tree-sitter))
   - [lazygit](https://github.com/jesseduffield/lazygit) for `<space>gg` (or
     set `neokak_git_tool` to another program)
   - [kakoune-lsp](https://github.com/kakoune-lsp/kakoune-lsp) (`kak-lsp`) for
@@ -146,6 +158,7 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `neokak_git_tool`             | `lazygit` | Program `<space>gg` runs                       |
 | `neokak_session`              | `true`    | Save the open files of each project            |
 | `neokak_session_autorestore`  | `false`   | Restore the session when started without files |
+| `neokak_ts_faces`             | `true`    | Link tree-sitter faces to your colorscheme's   |
 | `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
 | `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
 
@@ -156,6 +169,49 @@ Set them with `set-option global <option> <value>` in `init.kak`.
 | `NEOKAK_ASCII=1`     | Same as `--ascii`                                         |
 | `NEOKAK_DEBUG=1`     | Log frontend events to `~/.local/state/neokak/debug.log`  |
 | `NEOKAK_NO_LSP=1`    | Don't load kak-lsp (if your kakrc loads it, it still runs) |
+
+### Tree-sitter
+
+When [kak-tree-sitter](https://git.sr.ht/~hadronized/kak-tree-sitter) is on
+your PATH, neokak starts it (unless your kakrc already does) and gets:
+
+- **Highlighting** from tree-sitter grammars. kak-tree-sitter's `ts_*` faces
+  are linked to Kakoune's standard faces (`function`, `keyword`, `string`,
+  ...), so your usual colorscheme colors it. Using a colorscheme with its own
+  `ts_*` faces? Set `neokak_ts_faces false`.
+- **Text objects**: `<a-a>f` / `<a-i>f` select the function around the cursor
+  (or its body), `<a-a>t` / `<a-i>t` the type (struct, class, impl).
+- **Function folds**: `<space>zc` folds the whole function around the cursor.
+
+Grammars are installed per language with `ktsctl sync rust nix ...`. With
+home-manager:
+
+```nix
+home.packages = [ pkgs.kak-tree-sitter ];
+home.activation.kakTreeSitterGrammars = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+  PATH="${lib.makeBinPath [ pkgs.git ]}:$PATH" \
+    run ${pkgs.kak-tree-sitter}/bin/ktsctl sync rust nix toml markdown
+'';
+```
+
+### Folding
+
+Kakoune has no folding of its own, so neokak draws folds itself: a folded
+block collapses into its first line followed by `··· N lines`. `<space>zc`
+folds the function around the cursor when tree-sitter knows the language,
+and otherwise the block indented deeper than the cursor line (or the block
+the cursor is in). `<space>zz` toggles, `<space>zo` opens the fold at the
+cursor and `<space>zR` opens them all.
+
+Folded lines aren't skipped by cursor movement the way they are in Vim:
+moving into a fold (or jumping into one from a search or a picker) shows its
+lines, and they fold again once the cursor leaves.
+
+### References with context
+
+`<space>sR` lists every reference to the symbol under the cursor together
+with three lines of code around each, grouped by file, in a `*references*`
+buffer (in ripgrep's `-C` format). `<ret>` on a reference line jumps to it.
 
 ### Sessions
 
@@ -224,8 +280,14 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>fb` / `<space>fr`  | Buffers / recent files               |
 | `<space>fc` / `<space>ft`  | Kakoune colorschemes / neokak themes |
 | `<space>fp`                | List of all pickers                  |
+| `<space>j` / `<space>k`    | Next / previous function             |
+| `<space>J` / `<space>K`    | Next / previous symbol               |
+| `<space>zz` / `<space>zc`  | Toggle fold / fold                   |
+| `<space>zo` / `<space>zR`  | Unfold / unfold all                  |
+| `<a-a>f` / `<a-a>t`        | Select function / type (tree-sitter) |
 | `<space>ss` / `<space>sS`  | Document symbols / workspace symbols |
-| `<space>sr` / `<space>sd`  | References / diagnostics             |
+| `<space>sr` / `<space>sR`  | References / references with context |
+| `<space>sd`                | Diagnostics                          |
 | `<space>si` / `<space>st`  | Implementations / type definitions   |
 | `<space>gg`                | lazygit in a floating terminal       |
 | `<space>gs`                | Changed files                        |
@@ -312,6 +374,12 @@ neokak-theme <name>
 
 # Run a program in a floating terminal until it exits.
 neokak-float <program> [<args>...]
+
+# Folds.
+neokak-fold
+neokak-unfold
+neokak-fold-toggle
+neokak-unfold-all
 
 # Sessions.
 neokak-session-restore

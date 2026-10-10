@@ -722,6 +722,10 @@ impl App {
             "lsp-results" => {
                 let content = std::fs::read_to_string(arg(4)).unwrap_or_default();
                 let _ = std::fs::remove_file(arg(4));
+                if let Some(title) = arg(5).strip_prefix("context:") {
+                    let items = crate::lsp::items(arg(2), Path::new(arg(3)), &content);
+                    return self.show_in_context(title, &items);
+                }
                 let title = match arg(5) {
                     "" => crate::lsp::title(arg(1), arg(2)),
                     custom => custom.to_owned(),
@@ -777,6 +781,17 @@ impl App {
                 self.notify("info", "Session forgotten; not saving it until neokak restarts");
             }
             "session-load" => self.switch_project(arg(1)),
+            "fold-ts" => {
+                // kak-tree-sitter answers asynchronously: type <a-a>f as if
+                // by hand, give it a moment, then fold what got selected.
+                self.pane_mut().kak.keys(&["<a-a>".to_owned(), "f".to_owned()]);
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let _ = tx.send(AppEvent::Ipc(vec!["fold-finish".into()]));
+                });
+            }
+            "fold-finish" => self.eval("neokak-fold-finish"),
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),
@@ -871,6 +886,22 @@ impl App {
             },
         };
         self.picker = Some(picker);
+    }
+
+    /// Opens LSP locations with the code around each in a `*<title>*`
+    /// grep buffer, where `<ret>` on a location jumps to it.
+    fn show_in_context(&mut self, title: &str, items: &[String]) {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let view = crate::lsp::context_view(items, &cwd, 3);
+        if view.is_empty() {
+            return self.notify("info", &format!("{title}: nothing found"));
+        }
+        let name = format!("*{}*", title.to_lowercase());
+        self.eval(&format!(
+            "edit! -scratch {name}\nset-register dquote {view}\nexecute-keys '%R'\nset-option buffer filetype grep\nexecute-keys gg",
+            name = session::quote(&name),
+            view = session::quote(&view),
+        ));
     }
 
     /// This project's session file.
