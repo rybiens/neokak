@@ -34,6 +34,8 @@ hook global ClientClose .* %{ neokak-msg clientclose %val{hook_param} }
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 # The frontend draws a lualine-style statusline itself. It reads its fields
 # from the modeline, separated by U+241E so they survive Kakoune's markup.
+# The last field is one character per face, so the frontend can read the
+# colorscheme's colors (for the "kakoune" theme).
 
 declare-option -hidden str neokak_mode normal
 hook global ModeChange '(?:push|pop):.*:(.*)' %{
@@ -140,7 +142,7 @@ hook global ModeChange 'pop:insert:.*' %{
     }
 }
 
-set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified}␞%val{cursor_line}␞%val{cursor_char_column}␞%val{buf_line_count}␞%opt{filetype}␞{{mode_info}}␞%opt{lsp_diagnostic_error_count}␞%opt{lsp_diagnostic_warning_count}'
+set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified}␞%val{cursor_line}␞%val{cursor_char_column}␞%val{buf_line_count}␞%opt{filetype}␞{{mode_info}}␞%opt{lsp_diagnostic_error_count}␞%opt{lsp_diagnostic_warning_count}␞{Default}D{StatusLine}S{MenuBackground}M{MenuForeground}F{LineNumbers}L{BufferPadding}P{comment}c{function}f{keyword}k{string}s{type}t{value}v{module}m{Error}E'
 
 # Interface theme
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
@@ -148,7 +150,8 @@ set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified
 # Kakoune colorscheme.
 
 declare-option -docstring %{
-    neokak interface theme: gruvbox, gruvbox-light, tokyonight, catppuccin, nord, onedark
+    neokak interface theme: gruvbox, gruvbox-light, tokyonight, catppuccin, nord, onedark,
+    or kakoune to follow the Kakoune colorscheme
 } str neokak_theme gruvbox
 declare-option -docstring 'draw popups on the terminal background instead of the theme color' bool neokak_transparent true
 declare-option -docstring %{
@@ -159,7 +162,7 @@ declare-option -docstring %{
 define-command neokak-theme -params 1 -docstring %{
     neokak-theme <name>: switch the interface theme
 } -shell-script-candidates %{
-    printf '%s\n' gruvbox gruvbox-light tokyonight catppuccin nord onedark
+    printf '%s\n' gruvbox gruvbox-light tokyonight catppuccin nord onedark kakoune
 } %{
     set-option global neokak_theme %arg{1}
 }

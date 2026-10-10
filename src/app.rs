@@ -16,6 +16,7 @@ use ratatui::{Frame, Terminal};
 
 use crate::event::{AppEvent, TermSlot, Tx};
 use crate::kak::client::KakClient;
+use crate::kak::rpc::KakEvent;
 use crate::kak::session;
 use crate::keys;
 use crate::pane::{self, Dir, Pane, PaneId, Separator, Split};
@@ -126,6 +127,10 @@ pub struct App {
     term_visible: bool,
     /// A program running in a float until it exits (lazygit, ...).
     tool: Option<FloatTerm>,
+    /// The theme options from kak, kept to rebuild the theme when the
+    /// colorscheme (seen through the modeline probe) changes.
+    theme_settings: (String, bool, Vec<String>),
+    face_probe: Vec<(char, crate::kak::rpc::Face)>,
     /// Inline blame for the focused pane's cursor line.
     blame: Option<Blame>,
     dashboard: bool,
@@ -165,6 +170,8 @@ impl App {
             term_visible: false,
             tool: None,
             blame: None,
+            theme_settings: ("gruvbox".into(), true, Vec::new()),
+            face_probe: Vec::new(),
             dashboard,
             dirty: true,
             quit: false,
@@ -239,6 +246,15 @@ impl App {
         self.dirty = true;
         match ev {
             AppEvent::Kak(id, ev) => {
+                if let KakEvent::DrawStatus { mode_line, .. } = &ev {
+                    let probe = statusline::face_probe(mode_line);
+                    if !probe.is_empty() && probe != self.face_probe {
+                        self.face_probe = probe;
+                        if self.theme_settings.0 == "kakoune" {
+                            self.rebuild_theme();
+                        }
+                    }
+                }
                 if let Some(p) = self.panes.iter_mut().find(|p| p.id == id) {
                     p.handle_kak(ev);
                 }
@@ -621,10 +637,9 @@ impl App {
                 self.pickers.insert(arg(1).to_owned(), def);
             }
             "theme" => {
-                let (theme, errors) =
-                    Theme::from_settings(arg(1), arg(2) != "false", args.get(3..).unwrap_or_default());
-                self.theme = theme;
-                for e in errors {
+                self.theme_settings =
+                    (arg(1).to_owned(), arg(2) != "false", args.get(3..).unwrap_or_default().to_vec());
+                for e in self.rebuild_theme() {
                     self.notify("error", &e);
                 }
             }
@@ -681,6 +696,14 @@ impl App {
             },
             _ => {}
         }
+    }
+
+    /// Rebuilds the theme from its settings; returns setting errors.
+    fn rebuild_theme(&mut self) -> Vec<String> {
+        let (name, transparent, overrides) = &self.theme_settings;
+        let (theme, errors) = Theme::from_settings(name, *transparent, overrides, &self.face_probe);
+        self.theme = theme;
+        errors
     }
 
     fn notify(&mut self, level: &str, message: &str) {

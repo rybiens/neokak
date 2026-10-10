@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A `kakoune` theme that takes the interface colors from the Kakoune
+  colorscheme and updates when it changes.
 - Git integration: change markers in the gutter that update as you type
   (using Kakoune's git tool), `<space>gn`/`<space>gp` to jump between
   changes, inline blame for the cursor line (`<space>gb`), a changed-files

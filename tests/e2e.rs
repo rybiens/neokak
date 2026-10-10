@@ -170,7 +170,8 @@ fn theme_picker_applies_the_choice() {
     nk.send(" ft");
     nk.wait_for("themes picker", |t| t.contains("Themes") && t.contains("catppuccin"));
     nk.send("nord");
-    nk.wait_for("filtered", |t| t.contains("1/6"));
+    let count = format!("1/{}", neokak::ui::theme::THEMES.len());
+    nk.wait_for("filtered", |t| t.contains(&count));
     nk.send("\r");
     let (row, col) = PILL;
     nk.wait_bg("nord blue", row, col, vt100::Color::Rgb(0x81, 0xa1, 0xc1));
@@ -339,5 +340,22 @@ fn programs_run_in_a_float_until_they_exit() {
 
     nk.send(":neokak-float no-such-program-xyz\r");
     nk.wait_text("no-such-program-xyz not found");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn kakoune_theme_follows_the_colorscheme() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    let (row, col) = PILL;
+    nk.send(":set-face global function rgb:123456\r");
+    nk.send(":neokak-theme kakoune\r");
+    nk.wait_bg("pill in the function color", row, col, vt100::Color::Rgb(0x12, 0x34, 0x56));
+    // Changing the colorscheme updates the interface live.
+    nk.send(":set-face global function rgb:abcdef\r");
+    nk.wait_bg("new function color", row, col, vt100::Color::Rgb(0xab, 0xcd, 0xef));
     quit(nk, &sandbox);
 }

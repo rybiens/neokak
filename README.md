@@ -25,8 +25,9 @@ model, your kakrc and your Kakoune plugins.
 - **Floating command line**, with completion and command help in floats
 - **Completion and hover popups** with rounded borders. Hover docs float just
   above the text they describe.
-- **Themes**: six built-in interface themes with live switching, per-color
-  overrides, and optional transparent popups
+- **Themes**: six built-in interface themes plus one that follows your
+  Kakoune colorscheme, with live switching, per-color overrides, and
+  optional transparent popups
 - **Which-key**: press the leader and a panel lists the available keys
 - **Telescope-style pickers** with fuzzy matching and a preview pane: files,
   live grep (ripgrep), buffers, recent files, colorschemes, themes, plus your
@@ -158,7 +159,11 @@ explorer and terminal frame. Text inside the editor keeps your Kakoune
 colorscheme, so pick a theme that matches it.
 
 Built-in themes: `gruvbox` (default), `gruvbox-light`, `tokyonight`,
-`catppuccin`, `nord` and `onedark`.
+`catppuccin`, `nord` and `onedark`. There's also `kakoune`, which takes its
+colors from your Kakoune colorscheme and follows it when it changes: function
+names become the accent color, keywords, strings and types the other accents,
+comments the dim text, and the menu and status line faces the popup and bar
+backgrounds. Faces your colorscheme leaves unset keep the gruvbox color.
 
 ```kak
 # In ~/.config/neokak/init.kak
@@ -376,7 +381,9 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
 
 ## Roadmap
 
-- Deriving the interface colors from the Kakoune colorscheme automatically
+- Live workspace-symbol search (results update as you type)
+- Staging and resetting individual git hunks
+- Restoring the last session's buffers and layout
 
 ## License
 
