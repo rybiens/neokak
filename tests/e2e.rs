@@ -135,3 +135,65 @@ fn floating_terminal_runs_a_shell() {
     nk.wait_for("terminal hidden", |t| !t.contains("neo42"));
     quit(nk, &sandbox);
 }
+
+/// The statusline's mode pill uses the theme's blue.
+const PILL: (u16, u16) = (Neokak::ROWS - 2, 1);
+
+#[test]
+fn themes_switch_live() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    let (row, col) = PILL;
+    nk.wait_bg("gruvbox blue", row, col, vt100::Color::Rgb(0x83, 0xa5, 0x98));
+
+    nk.send(":neokak-theme tokyonight\r");
+    nk.wait_bg("tokyonight blue", row, col, vt100::Color::Rgb(0x7a, 0xa2, 0xf7));
+
+    nk.send(":set-option global neokak_theme_colors blue=#ff0000\r");
+    nk.wait_bg("overridden blue", row, col, vt100::Color::Rgb(0xff, 0x00, 0x00));
+
+    nk.send(":neokak-theme nonexistent\r");
+    nk.wait_text("unknown theme");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn theme_picker_applies_the_choice() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(" ft");
+    nk.wait_for("themes picker", |t| t.contains("Themes") && t.contains("catppuccin"));
+    nk.send("nord");
+    nk.wait_for("filtered", |t| t.contains("1/6"));
+    nk.send("\r");
+    let (row, col) = PILL;
+    nk.wait_bg("nord blue", row, col, vt100::Color::Rgb(0x81, 0xa1, 0xc1));
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn untitled_info_floats_above_the_cursor() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let text: String = (1..=40).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(sandbox.project.join("long.txt"), text).unwrap();
+    let nk = Neokak::spawn(&sandbox, &["--clean", "+20", "long.txt"]);
+    let screen = nk.wait_for("long.txt at line 20", |t| t.contains("line 20") && t.contains("NORMAL"));
+    let cursor_row = screen.lines().position(|l| l.contains("line 20")).unwrap();
+
+    // `info` without -anchor or -title is what kak-lsp's hover sends.
+    nk.send(":info 'fn foo(x: i32) -> bool'\r");
+    let screen = nk.wait_text("fn foo(x: i32) -> bool");
+    let hover_row = screen.lines().position(|l| l.contains("fn foo(x: i32) -> bool")).unwrap();
+    assert!(hover_row < cursor_row, "hover at row {hover_row} should be above the cursor row {cursor_row}");
+    assert!(screen.lines().nth(cursor_row).unwrap().contains("line 20"), "cursor line stays visible");
+    quit(nk, &sandbox);
+}

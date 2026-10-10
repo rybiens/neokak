@@ -87,12 +87,39 @@ hook global ModeChange 'pop:insert:.*' %{
 
 set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified}␞%val{cursor_line}␞%val{cursor_char_column}␞%val{buf_line_count}␞%opt{filetype}␞{{mode_info}}␞%opt{lsp_diagnostic_error_count}␞%opt{lsp_diagnostic_warning_count}'
 
+# Interface theme
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# Colors of everything neokak draws itself. Text in the editor keeps the
+# Kakoune colorscheme.
+
+declare-option -docstring %{
+    neokak interface theme: gruvbox, gruvbox-light, tokyonight, catppuccin, nord, onedark
+} str neokak_theme gruvbox
+declare-option -docstring 'draw popups on the terminal background instead of the theme color' bool neokak_transparent true
+declare-option -docstring %{
+    theme color overrides as name=color, e.g. blue=#7aa2f7 bg_sel=rgb:3b4261
+    names: bg_float bg_bar bg_alt bg_sel fg fg_dim border red green yellow blue purple aqua orange
+} str-list neokak_theme_colors
+
+define-command neokak-theme -params 1 -docstring %{
+    neokak-theme <name>: switch the interface theme
+} -shell-script-candidates %{
+    printf '%s\n' gruvbox gruvbox-light tokyonight catppuccin nord onedark
+} %{
+    set-option global neokak_theme %arg{1}
+}
+
+define-command -hidden neokak-sync-theme %{
+    neokak-msg theme %opt{neokak_theme} %opt{neokak_transparent} %opt{neokak_theme_colors}
+}
+hook global GlobalSetOption 'neokak_(theme|transparent|theme_colors)=.*' neokak-sync-theme
+
 # Pickers and the plugin API
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 
 define-command neokak-picker -params 1 -docstring %{
     neokak-picker <name>: open a picker
-    Built in: files, grep, buffers, recent, pickers. Plugins add more with
+    Built in: files, grep, buffers, recent, themes, pickers. Plugins add more with
     neokak-picker-define.
 } %{
     neokak-msg picker %arg{1}
@@ -150,6 +177,7 @@ map global find g ': neokak-picker grep<ret>'         -docstring 'live grep'
 map global find b ': neokak-picker buffers<ret>'      -docstring 'buffers'
 map global find r ': neokak-picker recent<ret>'       -docstring 'recent files'
 map global find c ': neokak-picker colorschemes<ret>' -docstring 'colorschemes'
+map global find t ': neokak-picker themes<ret>'       -docstring 'interface themes'
 map global find p ': neokak-picker pickers<ret>'      -docstring 'all pickers'
 
 map global buffer b ': neokak-picker buffers<ret>' -docstring 'pick buffer'
@@ -280,3 +308,4 @@ evaluate-commands %sh{
 
 neokak-sync-current
 neokak-sync-buflist
+neokak-sync-theme

@@ -5,12 +5,14 @@ use ratatui::layout::Rect;
 
 use super::draw::{atom_segs, fill, put_segs};
 use super::theme::face_style;
-use crate::kak::rpc::{Face, Line};
+use crate::kak::rpc::{Coord, Face, Line};
 
 #[derive(Default)]
 pub struct EditorView {
     pub lines: Vec<Line>,
     pub default_face: Face,
+    /// Main cursor, relative to the pane.
+    pub cursor: Coord,
 }
 
 impl EditorView {
@@ -34,7 +36,11 @@ mod tests {
     #[test]
     fn draws_lines_and_blanks_the_rest() {
         let atom = |s: &str| Atom { face: Face::default(), contents: s.into() };
-        let view = EditorView { lines: vec![vec![atom("hel"), atom("lo\n")]], default_face: Face::default() };
+        let view = EditorView {
+            lines: vec![vec![atom("hel"), atom("lo\n")]],
+            default_face: Face::default(),
+            cursor: Coord::default(),
+        };
         let area = Rect::new(0, 0, 10, 3);
         let mut buf = Buffer::empty(area);
         view.render(&mut buf, area);

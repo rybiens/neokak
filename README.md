@@ -23,11 +23,14 @@ model, your kakrc and your Kakoune plugins.
 - **Lualine-style statusline**: mode, git branch, file, modified marker, LSP
   error and warning counts, filetype, position
 - **Floating command line**, with completion and command help in floats
-- **Completion and hover popups** with rounded borders that suit transparent
-  terminals
+- **Completion and hover popups** with rounded borders. Hover docs float just
+  above the text they describe.
+- **Themes**: six built-in interface themes with live switching, per-color
+  overrides, and optional transparent popups
 - **Which-key**: press the leader and a panel lists the available keys
 - **Telescope-style pickers** with fuzzy matching and a preview pane: files,
-  live grep (ripgrep), buffers, recent files, colorschemes, plus your own
+  live grep (ripgrep), buffers, recent files, colorschemes, themes, plus your
+  own
 - **File explorer** (neo-tree style) with git status, plus create, rename and
   delete
 - **Floating terminal** (toggleterm style) that keeps your shell running when
@@ -121,9 +124,14 @@ Because neokak's defaults load after your kakrc, its `<space>f`, `<space>b`,
 `<space>e`, `<space>t`, `<space>w`, `<space>|` and `<space>-` mappings replace
 any of yours on those keys. Remap them in `init.kak` if you want them back.
 
-| Setting                                         | Default | Effect                    |
-| ----------------------------------------------- | ------- | ------------------------- |
-| `set-option global neokak_hide_hints_in_insert` | `true`  | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
+| Option                        | Default   | Effect                                         |
+| ----------------------------- | --------- | ---------------------------------------------- |
+| `neokak_theme`                | `gruvbox` | Interface theme (see [Themes](#themes))        |
+| `neokak_transparent`          | `true`    | Draw popups on the terminal background         |
+| `neokak_theme_colors`         | (empty)   | Per-color theme overrides                      |
+| `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
+
+Set them with `set-option global <option> <value>` in `init.kak`.
 
 | Environment variable | Effect                                                    |
 | -------------------- | --------------------------------------------------------- |
@@ -131,8 +139,33 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `NEOKAK_DEBUG=1`     | Log frontend events to `~/.local/state/neokak/debug.log`  |
 | `NEOKAK_NO_LSP=1`    | Don't load kak-lsp (if your kakrc loads it, it still runs) |
 
-The colors are a fixed gruvbox-dark palette for now. Text inside the editor
-uses your Kakoune colorscheme.
+### Themes
+
+The theme colors everything neokak draws: the bars, popups, pickers,
+explorer and terminal frame. Text inside the editor keeps your Kakoune
+colorscheme, so pick a theme that matches it.
+
+Built-in themes: `gruvbox` (default), `gruvbox-light`, `tokyonight`,
+`catppuccin`, `nord` and `onedark`.
+
+```kak
+# In ~/.config/neokak/init.kak
+set-option global neokak_theme tokyonight
+
+# Solid popup backgrounds instead of the terminal's (e.g. for opaque terminals).
+set-option global neokak_transparent false
+
+# Adjust single colors on top of the theme.
+set-option global neokak_theme_colors blue=#7aa2f7 bg_sel=rgb:3b4261
+```
+
+Changes apply immediately, so you can also try themes from the command line
+with `:neokak-theme <name>` (it tab-completes), or from the picker with
+`<space>ft`. Colors you can override: `bg_float`, `bg_bar`, `bg_alt`,
+`bg_sel`, `fg`, `fg_dim`, `border`, `red`, `green`, `yellow`, `blue`,
+`purple`, `aqua` and `orange`. Colors are written `#rrggbb`, `rgb:rrggbb`, or
+a terminal color name like `blue` or `bright-black`. An unknown theme or a
+bad color shows an error notification.
 
 ## Keys
 
@@ -145,7 +178,8 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>,`                 | Switch buffer                        |
 | `<space>ff` / `<space>fg`  | Find files / live grep               |
 | `<space>fb` / `<space>fr`  | Buffers / recent files               |
-| `<space>fc` / `<space>fp`  | Colorschemes / list of all pickers   |
+| `<space>fc` / `<space>ft`  | Kakoune colorschemes / neokak themes |
+| `<space>fp`                | List of all pickers                  |
 | `<space>bn` / `<space>bp`  | Next / previous buffer               |
 | `<space>bd` / `<space>bD`  | Delete buffer / delete without saving |
 | `<space>e`                 | File explorer: open, focus, or close if focused |
@@ -205,6 +239,9 @@ neokak-picker <name>
 
 # Show a notification toast. <level> is info (default), warn or error.
 neokak-notify [<level>] <message>
+
+# Switch the interface theme.
+neokak-theme <name>
 
 # Explorer and panes, as used by the default mappings.
 neokak-explorer
@@ -307,12 +344,10 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
   measured at a different width than your terminal draws them, which can
   shift the terminal window's right border on those lines.
 - **Mouse support is lightly tested.**
-- **No theme configuration yet.** The interface uses a fixed gruvbox palette.
 
 ## Roadmap
 
-- Configurable themes, or deriving the interface colors from the Kakoune
-  colorscheme
+- Deriving the interface colors from the Kakoune colorscheme automatically
 - Resizable splits and explorer
 - LSP pickers (symbols, references, diagnostics)
 - Git integration beyond status (hunks, blame)

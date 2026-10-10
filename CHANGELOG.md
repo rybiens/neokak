@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Interface themes: `gruvbox`, `gruvbox-light`, `tokyonight`, `catppuccin`,
+  `nord` and `onedark`, set with the `neokak_theme` option or switched live
+  with `:neokak-theme` and the themes picker (`<space>ft`). Popup
+  transparency is now the `neokak_transparent` option, and single colors can
+  be overridden with `neokak_theme_colors`.
+- Fixed: LSP hover text (and other untitled info boxes) showed up in the
+  which-key panel at the bottom, with lines split at `": "`. It now floats
+  above the cursor, or below it when there's no room above. Anchored info
+  boxes also prefer the space above their anchor.
+
 ## v0.1.0
 
 First release. neokak runs Kakoune through its JSON UI and draws a

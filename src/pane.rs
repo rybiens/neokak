@@ -52,12 +52,13 @@ impl Pane {
 
     pub fn handle_kak(&mut self, ev: KakEvent) {
         match ev {
-            KakEvent::Draw { lines, default_face, .. } => {
+            KakEvent::Draw { lines, cursor, default_face, .. } => {
                 if std::mem::take(&mut self.first_frame) && self.size.0 > 0 {
                     self.kak.resize(self.size.0, self.size.1);
                 }
                 self.editor.lines = lines;
                 self.editor.default_face = default_face;
+                self.editor.cursor = cursor;
             }
             KakEvent::DrawStatus { prompt, content, cursor_pos, mode_line, default_face, style } => {
                 self.status = Status { prompt, content, cursor_pos, mode_line, default_face, style };

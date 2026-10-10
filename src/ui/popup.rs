@@ -104,7 +104,7 @@ fn render_menu_items(buf: &mut Buffer, area: Rect, menu: &Menu, theme: &Theme) {
         let y = inner.y + (i - first) as u16;
         let bg = if Some(i) == sel { theme.bg_sel } else { theme.bg_float };
         buf.set_style(Rect::new(inner.x, y, inner.width, 1), Style::new().bg(bg));
-        let mut segs = readable(atom_segs(item, &base, Some(bg)), theme.fg_dim);
+        let mut segs = readable(atom_segs(item, &base, Some(bg)), theme);
         if Some(i) == sel {
             for (_, s) in &mut segs {
                 *s = s.add_modifier(Modifier::BOLD);
@@ -130,29 +130,44 @@ fn render_menu_items(buf: &mut Buffer, area: Rect, menu: &Menu, theme: &Theme) {
     }
 }
 
-/// Chooses a w×h rect next to an anchor in editor coordinates.
+/// Chooses a w×h rect next to an anchor in editor coordinates, never
+/// covering the anchor's line. Uses the preferred side when it fits,
+/// otherwise the roomier side, shrinking to fit.
 fn place_near(editor: Rect, anchor: Coord, w: u16, h: u16, prefer_above: bool) -> Rect {
     let ax = editor.x + anchor.column.max(0) as u16;
-    let ay = editor.y + anchor.line.max(0) as u16;
-    let below_fits = ay + 1 + h <= editor.bottom();
-    let above_fits = ay >= editor.y + h;
-    let y = if (prefer_above && above_fits) || (!below_fits && above_fits) { ay - h } else { ay + 1 };
-    clamp(Rect::new(ax.saturating_sub(1), y, w, h), editor)
+    let ay = (editor.y + anchor.line.max(0) as u16).min(editor.bottom().saturating_sub(1));
+    let above = ay - editor.y;
+    let below = editor.bottom().saturating_sub(ay + 1);
+    let use_above = if prefer_above { above >= h || above > below } else { below < h && above > below };
+    let h = h.min(if use_above { above } else { below });
+    let y = if use_above { ay - h } else { ay + 1 };
+    let r = clamp(Rect::new(ax.saturating_sub(1), 0, w, 1), editor);
+    Rect { y, height: h, ..r }
+}
+
+/// Whether an info box is Kakoune's key help (which-key) rather than
+/// hover-style text: key help always has a title, while kak-lsp's default
+/// hover is an untitled box with the same style.
+pub fn is_key_help(info: &Info) -> bool {
+    matches!(info.style.as_str(), "prompt" | "modal") && !line_text(&info.title).trim().is_empty()
+}
+
+/// What an info box can be placed next to.
+#[derive(Default, Clone, Copy)]
+pub struct InfoAnchors {
+    /// The completion menu, if shown (for menu docs).
+    pub menu: Option<Rect>,
+    /// The floating command line, if shown.
+    pub cmdline: Option<Rect>,
+    /// The main cursor, relative to the pane.
+    pub cursor: Coord,
 }
 
 /// Kakoune info boxes: hover docs, command help, menu docs.
-pub fn render_info(
-    buf: &mut Buffer,
-    editor: Rect,
-    screen: Rect,
-    info: &Info,
-    menu_rect: Option<Rect>,
-    cmdline_rect: Option<Rect>,
-    theme: &Theme,
-) {
+pub fn render_info(buf: &mut Buffer, editor: Rect, screen: Rect, info: &Info, at: InfoAnchors, theme: &Theme) {
     let base = theme.base_face();
     let lines: Vec<Vec<Seg>> =
-        info.content.iter().map(|l| readable(atom_segs(l, &base, Some(theme.bg_float)), theme.fg_dim)).collect();
+        info.content.iter().map(|l| readable(atom_segs(l, &base, Some(theme.bg_float)), theme)).collect();
     let title = line_text(&info.title);
     let wrap_all = |w: usize| -> Vec<Vec<Seg>> { lines.iter().flat_map(|l| wrap(l, w)).collect() };
 
@@ -163,13 +178,15 @@ pub fn render_info(
     let w = (text_w + 4) as u16;
     let h = (natural.len().min(editor.height as usize) + 2) as u16;
 
-    let area = match (info.style.as_str(), menu_rect, cmdline_rect) {
+    let area = match (info.style.as_str(), at.menu, at.cmdline) {
         ("menuDoc", Some(m), _) | ("prompt", Some(m), Some(_)) => beside(m, w, h, screen),
         ("prompt", None, Some(c)) => beside(c, w, h, screen),
-        ("inlineAbove", ..) => place_near(editor, info.anchor, w, h, true),
-        ("inline" | "inlineBelow", ..) => place_near(editor, info.anchor, w, h, false),
-        // Fallback for prompt/modal boxes with nothing to attach to.
-        _ => clamp(Rect::new(editor.right().saturating_sub(w + 1), editor.bottom().saturating_sub(h), w, h), editor),
+        ("inlineBelow", ..) => place_near(editor, info.anchor, w, h, false),
+        // Hover docs read best above the text they describe.
+        ("inline" | "inlineAbove", ..) => place_near(editor, info.anchor, w, h, true),
+        // Untitled prompt/modal boxes (kak-lsp's default hover) attach to
+        // the cursor.
+        _ => place_near(editor, at.cursor, w, h, true),
     };
     let rows = if area.width == w { natural } else { wrap_all(area.width.saturating_sub(4) as usize) };
     let inner = float(buf, area, &title, theme);
@@ -291,6 +308,48 @@ mod tests {
     }
 
     #[test]
+    fn shrinks_to_the_roomier_side_without_covering_the_anchor() {
+        let editor = Rect::new(0, 0, 80, 20);
+        let r = place_near(editor, Coord { line: 5, column: 0 }, 30, 50, true);
+        assert_eq!((r.y, r.bottom()), (6, 20), "more room below than above");
+        let r = place_near(editor, Coord { line: 15, column: 0 }, 30, 50, true);
+        assert_eq!((r.y, r.bottom()), (0, 15), "more room above");
+    }
+
+    #[test]
+    fn key_help_needs_a_title() {
+        let info = |title: &str, style: &str| Info {
+            title: line(title),
+            content: vec![line("f: files")],
+            anchor: Coord::default(),
+            style: style.into(),
+        };
+        assert!(is_key_help(&info("user mapping", "prompt")));
+        assert!(is_key_help(&info("goto", "modal")));
+        assert!(!is_key_help(&info("", "prompt")), "kak-lsp hover has no title");
+        assert!(!is_key_help(&info("hover", "inline")));
+    }
+
+    #[test]
+    fn untitled_hover_floats_above_the_cursor() {
+        let editor = Rect::new(0, 0, 80, 20);
+        let info = Info {
+            title: line(""),
+            content: vec![line("fn foo(x: i32) -> bool"), line("Checks x.")],
+            anchor: Coord::default(),
+            style: "prompt".into(),
+        };
+        let mut buf = Buffer::empty(editor);
+        let cursor = Coord { line: 10, column: 4 };
+        let at = InfoAnchors { cursor, ..InfoAnchors::default() };
+        render_info(&mut buf, editor, editor, &info, at, &Theme::default());
+        let text = rows(&buf);
+        let sig = text.iter().position(|r| r.contains("fn foo(x: i32) -> bool")).expect("signature intact");
+        assert!(sig < 10, "drawn above the cursor line, got row {sig}");
+        assert!(text[10].trim().is_empty(), "cursor line left uncovered: {:?}", text[10]);
+    }
+
+    #[test]
     fn beside_avoids_covering_the_target() {
         let target = Rect::new(10, 5, 20, 3);
         let right = beside(target, 40, 10, Rect::new(0, 0, 100, 30));
@@ -365,7 +424,7 @@ mod tests {
             style: "inline".into(),
         };
         let mut buf = Buffer::empty(editor);
-        render_info(&mut buf, editor, editor, &info, None, None, &Theme::default());
+        render_info(&mut buf, editor, editor, &info, InfoAnchors::default(), &Theme::default());
         let wrapped = rows(&buf).iter().filter(|r| r.contains("word")).count();
         assert!(wrapped >= 3, "200 chars in a <60 col box need several rows");
     }
