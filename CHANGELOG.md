@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Project sessions: the files open in each project directory and the cursor
+  in each are saved as you work. Restore them from the dashboard (`s`) or
+  with `<space>qs`, switch projects with `<space>qp` (or `p` on the
+  dashboard), and forget a session with `<space>qd`. Optional automatic
+  restore with `neokak_session_autorestore`.
 - Fixed: quitting neokak (or closing its terminal) killed Kakoune while its
   shutdown hooks were running, which left kak-lsp and its language servers
   running after neokak exited. With rust-analyzer that leaked hundreds of MB

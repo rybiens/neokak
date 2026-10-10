@@ -28,7 +28,12 @@ hook global BufWritePost .* %{ neokak-msg written %val{hook_param} }
 # When the session's first client quits while others remain, Kakoune forks
 # the server into the background and it keeps that client's stdout open, so
 # the frontend can't rely on EOF to notice the client left.
-hook global ClientClose .* %{ neokak-msg clientclose %val{hook_param} }
+hook global ClientClose .* %{
+    # Save the session first: neokak may exit as soon as it hears the last
+    # client is gone.
+    try neokak-session-sync
+    neokak-msg clientclose %val{hook_param}
+}
 
 # Statusline data
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
@@ -249,12 +254,51 @@ define-command neokak-float -params 1.. -docstring %{
     neokak-msg float %arg{@}
 }
 
+# Sessions
+# ‾‾‾‾‾‾‾‾
+# The files open in each project directory (and the cursor in each) are
+# saved as you work, so they can be restored later.
+
+declare-option -docstring 'save the open files of each project directory' bool neokak_session true
+declare-option -docstring %{
+    restore the project's session when neokak starts without files
+} bool neokak_session_autorestore false
+declare-option -hidden str neokak_pos 1.1
+declare-option -hidden str-list neokak_session_data
+
+hook global NormalIdle .* %{ set-option buffer neokak_pos "%val{cursor_line}.%val{cursor_column}" }
+
+define-command -hidden neokak-session-sync %{
+    set-option global neokak_session_data
+    evaluate-commands -buffer * %{
+        set-option -add global neokak_session_data %val{buffile} %opt{neokak_pos}
+    }
+    neokak-msg session %opt{neokak_session} %opt{neokak_session_data}
+}
+hook global WinDisplay .* neokak-session-sync
+hook global BufWritePost .* neokak-session-sync
+# (Also on ClientClose, from the hook above.)
+
+define-command neokak-session-restore -docstring "reopen the files from this project's last session" %{
+    neokak-msg session-restore
+}
+define-command neokak-session-forget -docstring %{
+    neokak-session-forget: delete this project's session and stop saving it until neokak restarts
+} %{
+    neokak-msg session-forget
+}
+define-command neokak-session-load -params 1 -docstring %{
+    neokak-session-load <dir>: switch to a project directory and restore its session
+} %{
+    neokak-msg session-load %arg{1}
+}
+
 # Pickers and the plugin API
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 
 define-command neokak-picker -params 1 -docstring %{
     neokak-picker <name>: open a picker
-    Built in: files, grep, buffers, recent, git-status, themes, pickers. Plugins add more with
+    Built in: files, grep, buffers, recent, projects, git-status, themes, pickers. Plugins add more with
     neokak-picker-define.
 } %{
     neokak-msg picker %arg{1}
@@ -299,6 +343,7 @@ try %{ declare-user-mode buffer }
 try %{ declare-user-mode window }
 try %{ declare-user-mode search }
 try %{ declare-user-mode git }
+try %{ declare-user-mode session }
 
 map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
 map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
@@ -309,6 +354,7 @@ map global user b       ': enter-user-mode buffer<ret>' -docstring '+buffer'
 map global user w       ': enter-user-mode window<ret>' -docstring '+window'
 map global user s       ': enter-user-mode search<ret>' -docstring '+search (LSP)'
 map global user g       ': enter-user-mode git<ret>'    -docstring '+git'
+map global user q       ': enter-user-mode session<ret>' -docstring '+session'
 map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
 map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
 
@@ -355,6 +401,10 @@ map global git p ': git prev-hunk<ret>'                      -docstring 'previou
 map global git b ': neokak-git-blame-toggle<ret>'            -docstring 'toggle line blame'
 map global git B ': git blame<ret>'                          -docstring 'blame the whole file'
 map global git d ': git diff %val{buffile}<ret>'             -docstring 'diff of this file'
+
+map global session s ': neokak-session-restore<ret>'   -docstring 'restore this project'
+map global session p ': neokak-picker projects<ret>'   -docstring 'switch project'
+map global session d ': neokak-session-forget<ret>'    -docstring "forget this project's session"
 
 # Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
 map global normal <c-right> ': neokak-window resize-right<ret>'
@@ -475,6 +525,8 @@ evaluate-commands %sh{
 neokak-sync-current
 neokak-sync-buflist
 neokak-sync-theme
+
+neokak-msg session-autorestore %opt{neokak_session_autorestore}
 
 # Files named on the command line were opened before this file was sourced.
 evaluate-commands -buffer * %{ try %{ nop %val{buffile}; neokak-git-check } }
