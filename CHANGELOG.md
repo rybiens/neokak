@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Clearer focus: the statusline shows `EXPLORER` or `TERMINAL` when those
+  have focus, the explorer header and the bufferline's active marker
+  highlight only while focused, and split panes get a title bar each, with
+  the focused one highlighted.
+- Fixed: leader mappings, including `<space>e` to hide the explorer, didn't
+  work while the explorer had focus.
 - A `kakoune` theme that takes the interface colors from the Kakoune
   colorscheme and updates when it changes.
 - Git integration: change markers in the gutter that update as you type

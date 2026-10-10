@@ -93,6 +93,9 @@ pub fn mode_label(mode: &str) -> String {
 pub struct StatusContext<'a> {
     pub mode_line: &'a Line,
     pub branch: Option<&'a str>,
+    /// What has focus when it isn't the editor (`EXPLORER`, `TERMINAL`);
+    /// replaces the mode in the pill.
+    pub focus: Option<&'a str>,
 }
 
 pub fn render(buf: &mut Buffer, area: Rect, ctx: &StatusContext, theme: &Theme, icons: &Icons) {
@@ -105,13 +108,16 @@ pub fn render(buf: &mut Buffer, area: Rect, ctx: &StatusContext, theme: &Theme, 
         return;
     };
 
-    let accent = theme.mode_color(&ml.mode);
+    let (label, accent) = match ctx.focus {
+        Some(what) => (what.to_uppercase(), theme.aqua),
+        None => (mode_label(&ml.mode), theme.mode_color(&ml.mode)),
+    };
     let a = Style::new().fg(theme.bg_bar).bg(accent).add_modifier(Modifier::BOLD);
     let b = Style::new().fg(theme.fg).bg(theme.bg_alt);
     let sep_a = Style::new().fg(accent).bg(theme.bg_alt);
     let sep_b = Style::new().fg(theme.bg_alt).bg(theme.bg_bar);
 
-    let mut left: Vec<Seg> = vec![(format!(" {} ", mode_label(&ml.mode)), a), (icons.sep_left().into(), sep_a)];
+    let mut left: Vec<Seg> = vec![(format!(" {label} "), a), (icons.sep_left().into(), sep_a)];
     match ctx.branch {
         Some(branch) => left.push((format!(" {}{branch} ", icons.branch()), b)),
         None => left.push((" ".into(), b)),
@@ -194,7 +200,7 @@ mod tests {
     fn render_text(mode_line: &Line, branch: Option<&str>) -> String {
         let area = Rect::new(0, 0, 100, 1);
         let mut buf = Buffer::empty(area);
-        let ctx = StatusContext { mode_line, branch };
+        let ctx = StatusContext { mode_line, branch, focus: None };
         render(&mut buf, area, &ctx, &Theme::default(), &Icons { nerd: false });
         crate::ui::draw::rows(&buf).join("")
     }
@@ -213,6 +219,17 @@ mod tests {
         assert!(text.contains("INSERT"));
         assert_eq!(text.matches("insert").count(), 0, "{text:?}");
         assert!(!text.contains("E:") && !text.contains("git:"));
+    }
+
+    #[test]
+    fn shows_what_has_focus() {
+        let ml = line("normal␞a.txt␞false␞1␞1␞1␞␞1 sel␞0␞0");
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        let ctx = StatusContext { mode_line: &ml, branch: None, focus: Some("explorer") };
+        render(&mut buf, area, &ctx, &Theme::default(), &Icons { nerd: false });
+        let text = crate::ui::draw::rows(&buf).join("");
+        assert!(text.contains(" EXPLORER ") && !text.contains("NORMAL"), "{text}");
     }
 
     #[test]

@@ -222,8 +222,14 @@ opens, `<esc>` closes, `<c-u>` clears the query and `<c-w>` deletes a word.
 
 **In the explorer:** `j`/`k` move, `l` or `<ret>` opens a file or expands a
 folder, `h` collapses, `a` creates a file (end the name with `/` for a
-folder), `r` renames, `d` deletes, `H` shows dotfiles, `R` refreshes, `<` and `>` change its width, `q`
-closes and `<esc>` returns to the editor.
+folder), `r` renames, `d` deletes, `H` shows dotfiles, `R` refreshes, `<` and `>` change its width, `q` or
+`<space>e` hides it, and `<esc>` returns to the editor while leaving it open.
+Leader mappings (`<space>…`) work from the explorer too.
+
+**Which part has focus:** the statusline's mode pill reads `EXPLORER` or
+`TERMINAL` when those have focus, the explorer's header lights up when it
+does, and with split panes each pane has a title bar with its buffer name,
+highlighted for the focused one.
 
 **With the mouse:** drag a separator between panes, or the explorer's right
 edge, to resize.

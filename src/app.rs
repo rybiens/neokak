@@ -79,6 +79,16 @@ struct Blame {
     text: Option<String>,
 }
 
+/// Progress of a leader sequence started from the explorer.
+#[derive(Clone, Copy, Default)]
+struct Leader {
+    /// Kakoune has reported a pending user mode.
+    seen_pending: bool,
+    /// Keys forwarded after the leader. Kakoune may process a fast sequence
+    /// before drawing, so the pending mode is never seen.
+    keys_after: u32,
+}
+
 /// A mouse drag in progress that resizes part of the layout.
 enum Dragging {
     Separator(Separator),
@@ -110,7 +120,12 @@ pub struct App {
     next_id: PaneId,
     pane_rects: Vec<(PaneId, Rect)>,
     separators: Vec<Separator>,
+    /// Title bars above each pane, when there are splits.
+    winbars: Vec<(PaneId, Rect)>,
     dragging: Option<Dragging>,
+    /// A leader key typed in the explorer went to Kakoune; the explorer gets
+    /// focus back once Kakoune's user mode is over.
+    tree_leader: Option<Leader>,
 
     buffers: Vec<String>,
     current_file: Option<PathBuf>,
@@ -154,7 +169,9 @@ impl App {
             next_id: 1,
             pane_rects: Vec::new(),
             separators: Vec::new(),
+            winbars: Vec::new(),
             dragging: None,
+            tree_leader: None,
             buffers: Vec::new(),
             current_file: None,
             branch: git_branch(),
@@ -230,6 +247,16 @@ impl App {
         self.pane_rects.clear();
         self.separators.clear();
         self.split.layout(self.layout.main, &mut self.pane_rects, &mut self.separators);
+        // With splits, each pane gets a title bar showing its buffer.
+        self.winbars.clear();
+        if self.pane_rects.len() > 1 {
+            for (id, rect) in &mut self.pane_rects {
+                if rect.height > 2 {
+                    self.winbars.push((*id, Rect { height: 1, ..*rect }));
+                    *rect = Rect { y: rect.y + 1, height: rect.height - 1, ..*rect };
+                }
+            }
+        }
         for (id, rect) in &self.pane_rects {
             if let Some(p) = self.panes.iter_mut().find(|p| p.id == *id) {
                 p.resize(*rect);
@@ -253,6 +280,17 @@ impl App {
                         if self.theme_settings.0 == "kakoune" {
                             self.rebuild_theme();
                         }
+                    }
+                }
+                if let (Some(leader), KakEvent::DrawStatus { mode_line, .. }) = (&mut self.tree_leader, &ev)
+                    && id == self.focus
+                    && let Some(ml) = ModeLine::parse(mode_line)
+                {
+                    if ml.mode.starts_with("next-key") {
+                        leader.seen_pending = true;
+                    } else if ml.mode == "normal" && (leader.seen_pending || leader.keys_after > 0) {
+                        self.tree_leader = None;
+                        self.tree_focused = self.tree.is_some();
                     }
                 }
                 if let Some(p) = self.panes.iter_mut().find(|p| p.id == id) {
@@ -457,10 +495,19 @@ impl App {
                     term.key(&key);
                 } else if let Some(action) = self.dashboard_key(&key) {
                     self.dashboard_action(action);
+                } else if self.tree_focused && key.code == KeyCode::Char(' ') && key.modifiers.is_empty() {
+                    // The leader works from the explorer too: hand Kakoune
+                    // the keys until its user mode ends (see tree_leader).
+                    self.tree_focused = false;
+                    self.tree_leader = Some(Leader::default());
+                    self.pane_mut().kak.keys(&["<space>".to_owned()]);
                 } else if let (Some(tree), true) = (&mut self.tree, self.tree_focused) {
                     let action = tree.handle_key(&key);
                     self.tree_action(action);
                 } else if let Some(k) = keys::to_kak(&key) {
+                    if let Some(l) = &mut self.tree_leader {
+                        l.keys_after += 1;
+                    }
                     self.pane_mut().kak.keys(&[k]);
                 }
             }
@@ -836,7 +883,9 @@ impl App {
 
     /// `<space>e`: open and focus, focus if open, close if focused.
     fn toggle_tree(&mut self) {
-        match (&mut self.tree, self.tree_focused) {
+        // From the explorer's own leader key, this means "hide it".
+        let focused = self.tree_focused || self.tree_leader.take().is_some();
+        match (&mut self.tree, focused) {
             (None, _) => {
                 let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 let mut tree = Tree::new(root);
@@ -951,6 +1000,8 @@ impl App {
             Action::Close => self.picker = None,
             Action::Eval(cmd) => {
                 self.picker = None;
+                // Whatever the picker opens shows up in the editor.
+                self.tree_focused = false;
                 self.eval(&cmd);
             }
             Action::OpenPicker(name) => self.open_picker(&name),
@@ -971,10 +1022,20 @@ impl App {
             tree.render(buf, area, self.tree_focused, theme, icons);
             // Like bufferline's neo-tree offset: label the explorer column.
             let label = Rect { width: area.width, ..layout.tabline };
-            tabline::render_offset(buf, label, "File Explorer", theme);
+            tabline::render_offset(buf, label, "File Explorer", self.tree_focused, theme);
             tabs_area = Rect { x: label.right(), width: layout.tabline.width - label.width, ..layout.tabline };
         }
-        self.tab_hits = tabline::render(buf, tabs_area, &self.buffers, &focused.current, modified, theme, icons);
+        let editor_focused = !self.tree_focused && self.tool.is_none() && !self.term_visible;
+        let active = tabline::Active { buffer: &focused.current, modified, focused: editor_focused };
+        self.tab_hits = tabline::render(buf, tabs_area, &self.buffers, &active, theme, icons);
+        for (id, rect) in &self.winbars {
+            if let Some(p) = self.panes.iter().find(|p| p.id == *id) {
+                let modified = ModeLine::parse(&p.status.mode_line).is_some_and(|m| m.modified);
+                let active =
+                    tabline::Active { buffer: &p.current, modified, focused: editor_focused && *id == self.focus };
+                tabline::render_winbar(buf, *rect, &active, theme, icons);
+            }
+        }
 
         for (id, rect) in &self.pane_rects {
             if let Some(p) = self.panes.iter().find(|p| p.id == *id) {
@@ -1021,7 +1082,14 @@ impl App {
         }
 
         let status = &focused.status;
-        let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref() };
+        let focus = if self.tool.is_some() || self.term_visible {
+            Some("terminal")
+        } else if self.tree_focused {
+            Some("explorer")
+        } else {
+            None
+        };
+        let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref(), focus };
         statusline::render(buf, layout.status, &ctx, theme, icons);
         let prompt = status.is_prompt();
         let messages = if prompt { &Vec::new() } else { &status.content };

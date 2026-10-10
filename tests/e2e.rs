@@ -359,3 +359,52 @@ fn kakoune_theme_follows_the_colorscheme() {
     nk.wait_bg("new function color", row, col, vt100::Color::Rgb(0xab, 0xcd, 0xef));
     quit(nk, &sandbox);
 }
+
+/// The statusline row.
+fn status(screen: &str) -> &str {
+    screen.lines().nth(Neokak::ROWS as usize - 2).unwrap_or_default()
+}
+
+#[test]
+fn explorer_focus_is_visible_and_the_leader_works_from_it() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(" e");
+    nk.wait_for("explorer focused", |t| t.contains("File Explorer") && status(t).contains("EXPLORER"));
+
+    // <esc> goes back to the editor and leaves the explorer open.
+    nk.esc();
+    nk.wait_for("editor focused", |t| t.contains("File Explorer") && status(t).contains("NORMAL"));
+    nk.send(" e");
+    nk.wait_for("explorer focused again", |t| status(t).contains("EXPLORER"));
+
+    // Leader mappings work from the explorer; focus comes back after.
+    nk.send(" ff");
+    nk.wait_text("Find Files");
+    nk.esc();
+    nk.wait_for("back in the explorer", |t| !t.contains("Find Files") && status(t).contains("EXPLORER"));
+
+    // <space>e from the explorer hides it.
+    nk.send(" e");
+    nk.wait_for("explorer hidden", |t| !t.contains("File Explorer") && status(t).contains("NORMAL"));
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn splits_show_a_title_bar_per_pane() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(" |");
+    nk.wait_for("a winbar over each pane", |t| t.lines().nth(1).is_some_and(|l| l.matches("notes.txt").count() == 2));
+    nk.send(" wq");
+    nk.wait_for("no winbar with one pane", |t| {
+        t.matches("hello from neokak").count() == 1 && !t.lines().nth(1).unwrap_or_default().contains("notes.txt")
+    });
+    quit(nk, &sandbox);
+}
