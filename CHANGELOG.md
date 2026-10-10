@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed: quitting neokak (or closing its terminal) killed Kakoune while its
+  shutdown hooks were running, which left kak-lsp and its language servers
+  running after neokak exited. With rust-analyzer that leaked hundreds of MB
+  per session. neokak now restores the terminal and lets Kakoune finish.
 - Clearer focus: the statusline shows `EXPLORER` or `TERMINAL` when those
   have focus, the explorer header and the bufferline's active marker
   highlight only while focused, and split panes get a title bar each, with

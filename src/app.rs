@@ -89,6 +89,17 @@ struct Leader {
     keys_after: u32,
 }
 
+/// Kakoune processes still shutting down when neokak's loop ends.
+pub struct Shutdown(Vec<KakClient>);
+
+impl Drop for Shutdown {
+    fn drop(&mut self) {
+        for kak in self.0.drain(..) {
+            kak.finish(Duration::from_secs(3));
+        }
+    }
+}
+
 /// A mouse drag in progress that resizes part of the layout.
 enum Dragging {
     Separator(Separator),
@@ -115,6 +126,8 @@ pub struct App {
     session: SessionInfo,
 
     panes: Vec<Pane>,
+    /// Clients of a session that's ending, to let finish (see [`Shutdown`]).
+    exiting: Vec<KakClient>,
     split: Split,
     focus: PaneId,
     next_id: PaneId,
@@ -164,6 +177,7 @@ impl App {
             layout: Layout::default(),
             session,
             panes: vec![Pane::new(0, MAIN_CLIENT.to_owned(), kak)],
+            exiting: Vec::new(),
             split: Split::Leaf(0),
             focus: 0,
             next_id: 1,
@@ -195,7 +209,14 @@ impl App {
         }
     }
 
-    pub fn run(mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>, rx: Receiver<AppEvent>) -> Result<()> {
+    /// Runs until Kakoune exits or neokak is told to quit. The returned
+    /// [`Shutdown`] waits for Kakoune to finish when dropped; drop it after
+    /// restoring the terminal so quitting doesn't look frozen.
+    pub fn run(
+        mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        rx: Receiver<AppEvent>,
+    ) -> Result<Shutdown> {
         let size = terminal.size()?;
         self.relayout(Rect::new(0, 0, size.width, size.height));
         while !self.quit {
@@ -220,11 +241,13 @@ impl App {
                 self.dirty = false;
             }
         }
-        match self.panes.first_mut() {
-            Some(p) => p.kak.kill_session(),
-            None => session::send_command(&self.session.name, "kill!"),
+        // With panes left, neokak is quitting by itself (signal, tty gone):
+        // end the session. Without, the session is already ending.
+        if let Some(p) = self.panes.first_mut() {
+            p.kak.kill_session();
         }
-        Ok(())
+        self.exiting.extend(self.panes.drain(..).map(|p| p.kak));
+        Ok(Shutdown(std::mem::take(&mut self.exiting)))
     }
 
     fn pane(&self) -> &Pane {
@@ -350,15 +373,17 @@ impl App {
         crate::debug!("remove pane {id}");
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let mut pane = self.panes.remove(i);
-        if pane.client == MAIN_CLIENT && !self.panes.is_empty() {
+        if self.panes.is_empty() {
+            // The session is ending; let Kakoune run its KakEnd hooks.
+            self.exiting.push(pane.kak);
+            self.quit = true;
+            return;
+        }
+        if pane.client == MAIN_CLIENT {
             // That process hosts the session server; leave it running.
             pane.kak.detach();
         }
         drop(pane);
-        if self.panes.is_empty() {
-            self.quit = true;
-            return;
-        }
         self.split.remove(id);
         if self.focus == id {
             self.focus = self.split.ids()[0];

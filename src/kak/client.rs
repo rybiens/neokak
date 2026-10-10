@@ -91,22 +91,34 @@ impl KakClient {
 }
 
 impl KakClient {
-    /// Asks the whole session to exit cleanly (so it removes its socket) and
-    /// waits briefly for this client to go with it.
+    /// Asks the whole session to exit. Kakoune still runs its KakEnd hooks
+    /// (kak-lsp shuts its language servers down there), so the process must
+    /// then be left to finish: see [`KakClient::finish`].
     pub fn kill_session(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
+        if self.running() {
             session::send_command(&self.session, "kill!");
-            let deadline = Instant::now() + Duration::from_millis(500);
-            while Instant::now() < deadline && matches!(self.child.try_wait(), Ok(None)) {
-                thread::sleep(Duration::from_millis(20));
-            }
         }
     }
-}
 
-impl KakClient {
+    /// Never kill this process on drop (it hosts the session server, or is
+    /// shutting down on its own).
     pub fn detach(&mut self) {
         self.detached = true;
+    }
+
+    fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Waits up to `timeout` for a process that is exiting by itself, then
+    /// leaves it to finish rather than killing it. Killing kak during its
+    /// KakEnd hooks orphans kak-lsp and its language servers.
+    pub fn finish(mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while self.running() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.detached = self.running();
     }
 }
 

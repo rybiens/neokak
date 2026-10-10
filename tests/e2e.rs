@@ -408,3 +408,25 @@ fn splits_show_a_title_bar_per_pane() {
     });
     quit(nk, &sandbox);
 }
+
+#[test]
+fn quitting_lets_kakoune_finish_its_shutdown_hooks() {
+    if !have_kak() {
+        return;
+    }
+    // kak-lsp stops its language servers from a KakEnd hook; if neokak
+    // kills Kakoune during that, the servers are orphaned.
+    let sandbox = Sandbox::new();
+    let marker = sandbox.home.join("kakend-done");
+    let config = sandbox.home.join(".config/neokak");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("init.kak"),
+        format!("hook global KakEnd .* %{{ nop %sh{{ sleep 1; touch '{}' }} }}\n", marker.display()),
+    )
+    .unwrap();
+    let mut nk = open_notes(&sandbox);
+    nk.send(":q\r");
+    assert!(nk.wait_exit());
+    common::wait_file(&marker, |_| marker.exists());
+}
