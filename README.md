@@ -60,7 +60,7 @@ Windows is not supported.
 ## Install
 
 ```sh
-git clone <this repository> neokak
+git clone https://github.com/rybiens/neokak.git
 cd neokak
 cargo install --path .
 ```
