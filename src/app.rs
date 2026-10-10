@@ -978,7 +978,8 @@ impl App {
         }
         self.branch = git_branch();
         self.session_saving = true;
-        self.restore_session(Some(format!("change-directory {}", session::quote(dir))));
+        let dir = session::quote(dir);
+        self.restore_session(Some(format!("change-directory {dir}\nneokak-close-outside {dir}")));
         self.reset_terminal();
         self.load_project_env(std::env::current_dir().unwrap_or(path));
     }

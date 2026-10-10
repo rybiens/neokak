@@ -239,8 +239,11 @@ session, to just those files once you quit. Files that no longer exist are
 skipped when restoring, and temporary copies from outside the project (such
 as sudoedit's) are never saved.
 
-Switching projects also starts the floating terminal over in the new
-directory, unless something is running in it.
+Switching projects closes the files from outside the new project (scratch
+buffers stay). If any of them have unsaved changes, neokak asks first: `y`
+discards the changes, `w` saves them all, any other key stays in the current
+project. It also starts the floating terminal over in the new directory,
+unless something is running in it.
 
 ### Project environments
 

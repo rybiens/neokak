@@ -8,6 +8,9 @@
   and floats with it.
 - Fixed: after switching projects, the floating terminal stayed in the old
   project's directory.
+- Switching projects closes the previous project's files, asking first when
+  they have unsaved changes. Before, they stayed open and were saved into the
+  new project's session.
 - Tree-sitter: when kak-tree-sitter is installed, neokak starts it, links its
   faces to the colorscheme's standard faces, and maps `<a-a>f`/`<a-a>t` to
   function and type text objects.

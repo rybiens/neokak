@@ -539,14 +539,22 @@ fn projects_picker_switches_project() {
     nk.send(" qp");
     nk.wait_for("projects picker", |t| t.contains("Projects") && t.contains("other-project"));
     nk.send("\r");
-    nk.wait_for("switched", |t| {
-        t.contains("from the other project") && t.lines().next().unwrap_or_default().contains("a.txt")
+    nk.wait_for("switched, and the old project's file closed", |t| {
+        let tabs = t.lines().next().unwrap_or_default();
+        t.contains("from the other project") && tabs.contains("a.txt") && !tabs.contains("notes.txt")
     });
     // Pickers now work in the new project.
     nk.send(" ff");
     nk.wait_for("files of the new project", |t| t.contains("Find Files") && t.contains("1/1"));
     nk.esc();
     quit(nk, &sandbox);
+    // Each project's session kept its own files.
+    let saved = |dir: &std::path::Path| {
+        let s = neokak::session::Session::load(&neokak::session::file_for(&sessions_dir(&sandbox), dir)).unwrap();
+        s.buffers.into_iter().map(|b| b.path).collect::<Vec<_>>()
+    };
+    assert_eq!(saved(&other), [other.join("a.txt").display().to_string()]);
+    assert_eq!(saved(&sandbox.project), [sandbox.project.join("notes.txt").display().to_string()]);
 }
 
 #[test]
@@ -622,6 +630,57 @@ fn custom_env_providers_load_at_startup() {
     nk.send("echo \"[$MY_ENV]\"\r");
     nk.wait_text("[custom]");
     nk.send("\x1c");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn switching_projects_asks_about_unsaved_changes() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let other = sandbox.home.join("other-project");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("a.txt"), "from the other project\n").unwrap();
+    let a = other.join("a.txt").display().to_string();
+    let session = neokak::session::Session {
+        cwd: other.display().to_string(),
+        current: Some(a.clone()),
+        buffers: vec![neokak::session::Entry { path: a, line: 1, column: 1 }],
+    };
+    session.save(&neokak::session::file_for(&sessions_dir(&sandbox), &other)).unwrap();
+    let switch = |nk: &Neokak| {
+        nk.send(" qp");
+        nk.wait_for("projects picker", |t| t.contains("Projects") && t.contains("other-project"));
+        nk.send("\r");
+        nk.wait_text("Unsaved changes");
+    };
+
+    let nk = open_notes(&sandbox);
+    nk.send("iedited \x1b");
+    nk.wait_text("edited hello");
+    // Any other key stays.
+    switch(&nk);
+    assert!(nk.contents().contains("notes.txt"));
+    nk.send("n");
+    nk.wait_text("Staying in this project");
+    assert!(nk.contents().contains("edited hello"));
+    // w saves, then switches.
+    switch(&nk);
+    nk.send("w");
+    nk.wait_for("switched", |t| t.contains("from the other project") && !t.contains("notes.txt"));
+    let notes = sandbox.project.join("notes.txt");
+    assert!(std::fs::read_to_string(&notes).unwrap().starts_with("edited hello"));
+    quit(nk, &sandbox);
+
+    // y discards.
+    let nk = open_notes(&sandbox);
+    nk.send("iagain \x1b");
+    nk.wait_text("again edited");
+    switch(&nk);
+    nk.send("y");
+    nk.wait_for("switched", |t| t.contains("from the other project") && !t.contains("notes.txt"));
+    assert!(std::fs::read_to_string(&notes).unwrap().starts_with("edited hello"));
     quit(nk, &sandbox);
 }
 
