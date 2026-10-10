@@ -57,6 +57,23 @@ impl ModeLine {
     }
 }
 
+/// The colorscheme probe at the end of neokak's modeline: one single-char
+/// atom per face, in the face's resolved colors (see rc/neokak.kak).
+pub fn face_probe(line: &Line) -> Vec<(char, Face)> {
+    let mut seps = 0;
+    let mut out = Vec::new();
+    for atom in line {
+        if seps >= 10 {
+            let mut chars = atom.contents.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                out.push((c, atom.face.clone()));
+            }
+        }
+        seps += atom.contents.matches(SEP).count();
+    }
+    out
+}
+
 pub fn mode_label(mode: &str) -> String {
     match mode {
         "prompt" => "COMMAND".into(),
@@ -202,6 +219,21 @@ mod tests {
     fn falls_back_to_raw_modeline() {
         let text = render_text(&line("custom modeline 1:1"), None);
         assert!(text.contains("custom modeline 1:1"));
+    }
+
+    #[test]
+    fn reads_the_face_probe() {
+        let atom = |s: &str, fg: &str| Atom { face: Face { fg: fg.into(), ..Face::default() }, contents: s.into() };
+        let line = vec![
+            atom("normal␞a␞false␞1␞1␞1␞rust␞1 sel␞0␞0␞", "default"),
+            atom("f", "rgb:83a598"),
+            atom("c", "rgb:928374"),
+        ];
+        let probe = face_probe(&line);
+        assert_eq!(probe.len(), 2);
+        assert_eq!((probe[0].0, probe[0].1.fg.as_str()), ('f', "rgb:83a598"));
+        assert!(face_probe(&self::line("normal␞a")).is_empty());
+        assert!(ModeLine::parse(&line).is_some(), "the probe doesn't break field parsing");
     }
 
     #[test]

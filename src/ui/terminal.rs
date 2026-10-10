@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::draw::float_with;
 use super::theme::Theme;
-use crate::event::{AppEvent, Tx};
+use crate::event::{AppEvent, TermSlot, Tx};
 
 const SCROLLBACK: usize = 5000;
 
@@ -22,13 +22,22 @@ pub struct Terminal {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     size: (u16, u16),
+    title: String,
 }
 
 impl Terminal {
-    pub fn spawn(rows: u16, cols: u16, tx: Tx) -> Result<Self> {
+    /// Runs `command` (or the user's shell) in a new pseudo-terminal.
+    pub fn spawn(rows: u16, cols: u16, command: Option<&[String]>, slot: TermSlot, tx: Tx) -> Result<Self> {
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
         let pair = native_pty_system().openpty(size)?;
-        let mut cmd = CommandBuilder::new_default_prog();
+        let (mut cmd, title) = match command {
+            Some([prog, args @ ..]) => {
+                let mut cmd = CommandBuilder::new(prog);
+                cmd.args(args);
+                (cmd, prog.rsplit('/').next().unwrap_or(prog).to_owned())
+            }
+            _ => (CommandBuilder::new_default_prog(), "Terminal".to_owned()),
+        };
         cmd.env("TERM", "xterm-256color");
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
@@ -43,13 +52,13 @@ impl Terminal {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        if tx.send(AppEvent::PtyOutput(buf[..n].to_vec())).is_err() {
+                        if tx.send(AppEvent::PtyOutput(slot, buf[..n].to_vec())).is_err() {
                             return;
                         }
                     }
                 }
             }
-            let _ = tx.send(AppEvent::PtyExited);
+            let _ = tx.send(AppEvent::PtyExited(slot));
         });
         Ok(Self {
             parser: vt100::Parser::new(rows, cols, SCROLLBACK),
@@ -57,6 +66,7 @@ impl Terminal {
             writer,
             child,
             size: (rows, cols),
+            title,
         })
     }
 
@@ -110,7 +120,7 @@ impl Terminal {
     pub fn render(&mut self, buf: &mut Buffer, screen: Rect, theme: &Theme) {
         let area = Self::area(screen);
         let scrolled = self.parser.screen().scrollback();
-        let title = if scrolled > 0 { format!("Terminal [+{scrolled}]") } else { "Terminal".into() };
+        let title = if scrolled > 0 { format!("{} [+{scrolled}]", self.title) } else { self.title.clone() };
         let inner = float_with(buf, area, &title, theme, theme.border().fg(theme.green));
         self.resize(inner.height, inner.width);
 

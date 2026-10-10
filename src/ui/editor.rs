@@ -16,6 +16,28 @@ pub struct EditorView {
 }
 
 impl EditorView {
+    /// Draws `text` a few columns after the end of the cursor's line, if it
+    /// fits (virtual text, like Neovim's inline blame).
+    pub fn render_after_cursor_line(&self, buf: &mut Buffer, area: Rect, text: &str, style: ratatui::style::Style) {
+        let Ok(row) = u16::try_from(self.cursor.line) else { return };
+        let Some(line) = self.lines.get(row as usize) else { return };
+        if row >= area.height {
+            return;
+        }
+        let used: usize = line.iter().map(|a| super::draw::width(a.contents.trim_end_matches('\n'))).sum();
+        let x = area.x + used as u16 + 4;
+        if x + 10 < area.right() {
+            super::draw::put(
+                buf,
+                x,
+                area.y + row,
+                area.right(),
+                text,
+                style.add_modifier(ratatui::style::Modifier::ITALIC),
+            );
+        }
+    }
+
     pub fn render(&self, buf: &mut Buffer, area: Rect) {
         let base = face_style(&self.default_face, &Face::default());
         fill(buf, area, base);

@@ -14,11 +14,12 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::{Frame, Terminal};
 
-use crate::event::{AppEvent, Tx};
+use crate::event::{AppEvent, TermSlot, Tx};
 use crate::kak::client::KakClient;
+use crate::kak::rpc::KakEvent;
 use crate::kak::session;
 use crate::keys;
-use crate::pane::{self, Dir, Pane, PaneId, Split};
+use crate::pane::{self, Dir, Pane, PaneId, Separator, Split};
 use crate::recent::Recent;
 use crate::ui::dashboard::{self, DashAction};
 use crate::ui::draw::put;
@@ -70,6 +71,25 @@ impl Layout {
     }
 }
 
+/// The line `git blame` was asked about, and its result once known.
+struct Blame {
+    client: String,
+    file: String,
+    line: usize,
+    text: Option<String>,
+}
+
+/// A mouse drag in progress that resizes part of the layout.
+enum Dragging {
+    Separator(Separator),
+    TreeEdge,
+}
+
+/// Explorer width limits (the layout also caps it at half the screen).
+const TREE_MIN_WIDTH: u16 = 12;
+/// Cells added or removed per resize step.
+const RESIZE_STEP: i32 = 2;
+
 /// How to start more clients of the session for splits.
 pub struct SessionInfo {
     pub name: String,
@@ -89,7 +109,8 @@ pub struct App {
     focus: PaneId,
     next_id: PaneId,
     pane_rects: Vec<(PaneId, Rect)>,
-    separators: Vec<(Dir, Rect)>,
+    separators: Vec<Separator>,
+    dragging: Option<Dragging>,
 
     buffers: Vec<String>,
     current_file: Option<PathBuf>,
@@ -104,6 +125,14 @@ pub struct App {
     input: Option<Input>,
     term: Option<FloatTerm>,
     term_visible: bool,
+    /// A program running in a float until it exits (lazygit, ...).
+    tool: Option<FloatTerm>,
+    /// The theme options from kak, kept to rebuild the theme when the
+    /// colorscheme (seen through the modeline probe) changes.
+    theme_settings: (String, bool, Vec<String>),
+    face_probe: Vec<(char, crate::kak::rpc::Face)>,
+    /// Inline blame for the focused pane's cursor line.
+    blame: Option<Blame>,
     dashboard: bool,
 
     dirty: bool,
@@ -125,6 +154,7 @@ impl App {
             next_id: 1,
             pane_rects: Vec::new(),
             separators: Vec::new(),
+            dragging: None,
             buffers: Vec::new(),
             current_file: None,
             branch: git_branch(),
@@ -138,6 +168,10 @@ impl App {
             input: None,
             term: None,
             term_visible: false,
+            tool: None,
+            blame: None,
+            theme_settings: ("gruvbox".into(), true, Vec::new()),
+            face_probe: Vec::new(),
             dashboard,
             dirty: true,
             quit: false,
@@ -212,6 +246,15 @@ impl App {
         self.dirty = true;
         match ev {
             AppEvent::Kak(id, ev) => {
+                if let KakEvent::DrawStatus { mode_line, .. } = &ev {
+                    let probe = statusline::face_probe(mode_line);
+                    if !probe.is_empty() && probe != self.face_probe {
+                        self.face_probe = probe;
+                        if self.theme_settings.0 == "kakoune" {
+                            self.rebuild_theme();
+                        }
+                    }
+                }
                 if let Some(p) = self.panes.iter_mut().find(|p| p.id == id) {
                     p.handle_kak(ev);
                 }
@@ -227,14 +270,33 @@ impl App {
             AppEvent::Term(ev) => self.handle_term(ev),
             AppEvent::Ipc(args) => self.handle_ipc(args),
             AppEvent::Wake => {}
-            AppEvent::PtyOutput(bytes) => {
-                if let Some(t) = &mut self.term {
+            AppEvent::PtyOutput(slot, bytes) => {
+                let term = match slot {
+                    TermSlot::Shell => &mut self.term,
+                    TermSlot::Tool => &mut self.tool,
+                };
+                if let Some(t) = term {
                     t.process(&bytes);
                 }
                 // Hidden terminal output doesn't need a frame.
-                self.dirty = self.term_visible;
+                self.dirty = slot == TermSlot::Tool || self.term_visible;
             }
-            AppEvent::PtyExited => {
+            AppEvent::PtyExited(TermSlot::Tool) => {
+                self.tool = None;
+                // The tool may have changed files or git state.
+                if let Some(tree) = &mut self.tree {
+                    tree.refresh();
+                }
+                self.eval("try %{ git update-diff }");
+            }
+            AppEvent::Blame { client, file, line, text } => {
+                if let Some(b) = &mut self.blame
+                    && (b.client.as_str(), b.file.as_str(), b.line) == (client.as_str(), file.as_str(), line)
+                {
+                    b.text = text;
+                }
+            }
+            AppEvent::PtyExited(TermSlot::Shell) => {
                 self.term = None;
                 self.term_visible = false;
             }
@@ -314,6 +376,11 @@ impl App {
                     session::eval_in_client(&self.session.name, &c, "quit");
                 }
             }
+            "equalize" => {
+                self.split.equalize();
+                self.relayout(self.screen);
+            }
+            c if c.starts_with("resize-") => self.resize(&c["resize-".len()..]),
             "next" => {
                 let ids = self.split.ids();
                 let i = ids.iter().position(|&i| i == self.focus).unwrap_or(0);
@@ -338,6 +405,35 @@ impl App {
         }
     }
 
+    /// `resize-left/right/up/down`: like Ctrl+arrows in LazyVim, change the
+    /// focused pane's (or the explorer's) width and height.
+    fn resize(&mut self, which: &str) {
+        let (dir, delta) = match which {
+            "right" => (Dir::Vertical, RESIZE_STEP),
+            "left" => (Dir::Vertical, -RESIZE_STEP),
+            "up" => (Dir::Horizontal, RESIZE_STEP),
+            "down" => (Dir::Horizontal, -RESIZE_STEP),
+            other => return self.notify("error", &format!("unknown resize direction: {other}")),
+        };
+        if self.tree_focused {
+            if dir == Dir::Vertical {
+                self.resize_tree(delta);
+            }
+            return;
+        }
+        if self.split.resize(self.layout.main, self.focus, dir, delta) {
+            self.relayout(self.screen);
+        }
+    }
+
+    fn resize_tree(&mut self, delta: i32) {
+        if let Some(tree) = &mut self.tree {
+            let max = (self.screen.width / 2).max(TREE_MIN_WIDTH);
+            tree.width = (tree.width as i32 + delta).clamp(TREE_MIN_WIDTH as i32, max as i32) as u16;
+            self.relayout(self.screen);
+        }
+    }
+
     fn handle_term(&mut self, ev: Event) {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
@@ -353,6 +449,8 @@ impl App {
                             self.file_op(input);
                         }
                     }
+                } else if let Some(tool) = &mut self.tool {
+                    tool.key(&key);
                 } else if is_term_toggle(&key) {
                     self.toggle_terminal();
                 } else if let (Some(term), true) = (&mut self.term, self.term_visible) {
@@ -368,6 +466,7 @@ impl App {
             }
             Event::Paste(text) => match (&mut self.picker, &mut self.term) {
                 (Some(p), _) => p.paste(&text),
+                _ if self.tool.is_some() => self.tool.as_mut().unwrap().paste(&text),
                 (None, Some(t)) if self.term_visible => t.paste(&text),
                 _ => self.pane_mut().kak.paste(&text),
             },
@@ -378,6 +477,14 @@ impl App {
     }
 
     fn handle_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        if let Some(t) = &mut self.tool {
+            match m.kind {
+                MouseEventKind::ScrollUp => t.scroll(3),
+                MouseEventKind::ScrollDown => t.scroll(-3),
+                _ => {}
+            }
+            return;
+        }
         if let (Some(t), true) = (&mut self.term, self.term_visible) {
             match m.kind {
                 MouseEventKind::ScrollUp => t.scroll(3),
@@ -395,6 +502,9 @@ impl App {
             return;
         }
         let pos = Position::new(m.column, m.row);
+        if self.drag(&m, pos) {
+            return;
+        }
         if let (Some(area), Some(tree)) = (self.layout.tree, &mut self.tree)
             && area.contains(pos)
         {
@@ -451,6 +561,46 @@ impl App {
         }
     }
 
+    /// Starts, continues or ends a drag on a separator or the explorer's
+    /// edge. Returns whether the event was used.
+    fn drag(&mut self, m: &crossterm::event::MouseEvent, pos: Position) -> bool {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(area) = self.layout.tree
+                    && m.column == area.right().saturating_sub(1)
+                    && area.contains(pos)
+                {
+                    self.dragging = Some(Dragging::TreeEdge);
+                    return true;
+                }
+                if let Some(sep) = self.separators.iter().find(|s| s.rect.contains(pos)) {
+                    self.dragging = Some(Dragging::Separator(sep.clone()));
+                    return true;
+                }
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) => match &self.dragging {
+                Some(Dragging::TreeEdge) => {
+                    let x = self.layout.tree.map_or(0, |a| a.x);
+                    let width = (m.column + 1).saturating_sub(x) as i32;
+                    let current = self.tree.as_ref().map_or(0, |t| t.width) as i32;
+                    self.resize_tree(width - current);
+                    true
+                }
+                Some(Dragging::Separator(sep)) => {
+                    let at = if sep.dir == Dir::Vertical { m.column } else { m.row };
+                    let sep = sep.clone();
+                    self.split.drag(self.layout.main, &sep, at);
+                    self.relayout(self.screen);
+                    true
+                }
+                None => false,
+            },
+            MouseEventKind::Up(MouseButton::Left) => self.dragging.take().is_some(),
+            _ => false,
+        }
+    }
+
     fn handle_ipc(&mut self, args: Vec<String>) {
         crate::debug!("ipc {args:?}");
         let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
@@ -487,13 +637,50 @@ impl App {
                 self.pickers.insert(arg(1).to_owned(), def);
             }
             "theme" => {
-                let (theme, errors) =
-                    Theme::from_settings(arg(1), arg(2) != "false", args.get(3..).unwrap_or_default());
-                self.theme = theme;
-                for e in errors {
+                self.theme_settings =
+                    (arg(1).to_owned(), arg(2) != "false", args.get(3..).unwrap_or_default().to_vec());
+                for e in self.rebuild_theme() {
                     self.notify("error", &e);
                 }
             }
+            "lsp-results" => {
+                let content = std::fs::read_to_string(arg(4)).unwrap_or_default();
+                let _ = std::fs::remove_file(arg(4));
+                let title = match arg(5) {
+                    "" => crate::lsp::title(arg(1), arg(2)),
+                    custom => custom.to_owned(),
+                };
+                let items = crate::lsp::items(arg(2), Path::new(arg(3)), &content);
+                if items.is_empty() {
+                    self.notify("info", &format!("{title}: nothing found"));
+                } else {
+                    self.picker = Some(Picker::list(&title, items, Accept::Location, self.tx.clone()));
+                }
+            }
+            "float" => self.run_floating(&args[1..]),
+            "blame" => {
+                let (client, file, line) = (arg(1), arg(2), arg(3).parse().unwrap_or(0));
+                // Line numbers don't match the committed file while there
+                // are unsaved edits.
+                if arg(4) == "true" || line == 0 || !Path::new(file).is_file() {
+                    self.blame = None;
+                    return;
+                }
+                if self
+                    .blame
+                    .as_ref()
+                    .is_some_and(|b| (b.client.as_str(), b.file.as_str(), b.line) == (client, file, line))
+                {
+                    return;
+                }
+                self.blame = Some(Blame { client: client.into(), file: file.into(), line, text: None });
+                let (tx, client, file) = (self.tx.clone(), client.to_owned(), file.to_owned());
+                std::thread::spawn(move || {
+                    let text = crate::git::blame_line(Path::new(&file), line);
+                    let _ = tx.send(AppEvent::Blame { client, file, line, text });
+                });
+            }
+            "blame-off" => self.blame = None,
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),
@@ -509,6 +696,14 @@ impl App {
             },
             _ => {}
         }
+    }
+
+    /// Rebuilds the theme from its settings; returns setting errors.
+    fn rebuild_theme(&mut self) -> Vec<String> {
+        let (name, transparent, overrides) = &self.theme_settings;
+        let (theme, errors) = Theme::from_settings(name, *transparent, overrides, &self.face_probe);
+        self.theme = theme;
+        errors
     }
 
     fn notify(&mut self, level: &str, message: &str) {
@@ -546,13 +741,19 @@ impl App {
                 Picker::list("Buffers", bufs, Accept::Buffer, tx)
             }
             "recent" => Picker::list("Recent Files", self.recent.files.clone(), Accept::Edit, tx),
+            "git-status" => Picker::command(
+                "Changed Files",
+                "git ls-files --modified --others --exclude-standard --deduplicate 2>/dev/null",
+                Accept::Edit,
+                tx,
+            ),
             "themes" => {
                 let names = THEMES.iter().map(|s| s.to_string()).collect();
                 Picker::list("Themes", names, Accept::Command("neokak-theme".into()), tx)
             }
             "pickers" => {
                 let mut names: Vec<String> =
-                    ["files", "grep", "buffers", "recent", "themes"].map(String::from).to_vec();
+                    ["files", "grep", "buffers", "recent", "git-status", "themes"].map(String::from).to_vec();
                 names.extend(self.pickers.keys().cloned());
                 Picker::list("Pickers", names, Accept::Picker, tx)
             }
@@ -567,6 +768,23 @@ impl App {
         self.picker = Some(picker);
     }
 
+    /// Runs a program in a floating terminal until it exits.
+    fn run_floating(&mut self, command: &[String]) {
+        let Some(prog) = command.first().filter(|p| !p.is_empty()) else { return };
+        if self.tool.is_some() {
+            return self.notify("warn", "a floating program is already running");
+        }
+        if !on_path(prog) {
+            return self.notify("error", &format!("{prog} not found"));
+        }
+        let inner = FloatTerm::area(self.screen);
+        let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
+        match FloatTerm::spawn(rows, cols, Some(command), TermSlot::Tool, self.tx.clone()) {
+            Ok(t) => self.tool = Some(t),
+            Err(e) => self.notify("error", &format!("{prog}: {e}")),
+        }
+    }
+
     fn toggle_terminal(&mut self) {
         if self.term_visible {
             self.term_visible = false;
@@ -575,7 +793,7 @@ impl App {
         if self.term.is_none() {
             let inner = FloatTerm::area(self.screen);
             let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
-            match FloatTerm::spawn(rows, cols, self.tx.clone()) {
+            match FloatTerm::spawn(rows, cols, None, TermSlot::Shell, self.tx.clone()) {
                 Ok(t) => self.term = Some(t),
                 Err(e) => return self.notify("error", &format!("terminal: {e}")),
             }
@@ -651,6 +869,7 @@ impl App {
                 self.relayout(self.screen);
             }
             TreeAction::Unfocus => self.tree_focused = false,
+            TreeAction::Resize(delta) => self.resize_tree(delta),
             TreeAction::NewFile(dir) => self.input = Some(Input::new(Purpose::NewFile(dir), &root)),
             TreeAction::Rename(p) => self.input = Some(Input::new(Purpose::Rename(p), &root)),
             TreeAction::Delete(p) => self.input = Some(Input::new(Purpose::Delete(p), &root)),
@@ -763,7 +982,7 @@ impl App {
             }
         }
         let multi = self.pane_rects.len() > 1;
-        for (dir, rect) in &self.separators {
+        for Separator { dir, rect, .. } in &self.separators {
             let (glyph, cells) = match dir {
                 Dir::Vertical => ("\u{2502}", rect.height),
                 Dir::Horizontal => ("\u{2500}", rect.width),
@@ -793,6 +1012,13 @@ impl App {
         if self.dashboard {
             dashboard::render(buf, focus_rect, theme, icons);
         }
+        // Inline blame after the cursor line (gitsigns' current_line_blame).
+        if let Some(Blame { client, line, text: Some(text), .. }) = &self.blame
+            && *client == focused.client
+            && ModeLine::parse(&focused.status.mode_line).is_some_and(|m| m.line == line.to_string() && !m.modified)
+        {
+            focused.editor.render_after_cursor_line(buf, focus_rect, text, theme.float().bg(theme.bg).fg(theme.fg_dim));
+        }
 
         let status = &focused.status;
         let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref() };
@@ -820,6 +1046,9 @@ impl App {
         if let (Some(t), true) = (&mut self.term, self.term_visible) {
             t.render(buf, screen, theme);
         }
+        if let Some(t) = &mut self.tool {
+            t.render(buf, screen, theme);
+        }
         if let Some(input) = &self.input {
             input.render(buf, screen, theme);
         }
@@ -833,6 +1062,14 @@ impl App {
 /// as `<c-4>`).
 fn is_term_toggle(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('\\' | '4'))
+}
+
+/// Whether `prog` can be run (a path, or a name found on PATH).
+fn on_path(prog: &str) -> bool {
+    if prog.contains('/') {
+        return Path::new(prog).is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(prog).is_file()))
 }
 
 fn git_branch() -> Option<String> {

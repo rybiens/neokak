@@ -13,9 +13,16 @@ pub enum AppEvent {
     Term(crossterm::event::Event),
     /// Side-channel message from kakscript (`neokak msg ...`).
     Ipc(Vec<String>),
-    /// Output from the floating terminal's shell.
-    PtyOutput(Vec<u8>),
-    PtyExited,
+    /// Output from a floating terminal.
+    PtyOutput(TermSlot, Vec<u8>),
+    PtyExited(TermSlot),
+    /// `git blame` result for a pane's cursor line.
+    Blame {
+        client: String,
+        file: String,
+        line: usize,
+        text: Option<String>,
+    },
     /// Background work (fuzzy matcher, grep) has new results.
     Wake,
     /// Results of a live-grep run, tagged with the query generation.
@@ -24,6 +31,15 @@ pub enum AppEvent {
         lines: Vec<String>,
         done: bool,
     },
+}
+
+/// Which floating terminal an event belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermSlot {
+    /// The toggleable shell (`<space>t`).
+    Shell,
+    /// A program run in a float until it exits (lazygit, `neokak-float`).
+    Tool,
 }
 
 pub type Tx = Sender<AppEvent>;

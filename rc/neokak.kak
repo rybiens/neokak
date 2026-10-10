@@ -34,6 +34,8 @@ hook global ClientClose .* %{ neokak-msg clientclose %val{hook_param} }
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 # The frontend draws a lualine-style statusline itself. It reads its fields
 # from the modeline, separated by U+241E so they survive Kakoune's markup.
+# The last field is one character per face, so the frontend can read the
+# colorscheme's colors (for the "kakoune" theme).
 
 declare-option -hidden str neokak_mode normal
 hook global ModeChange '(?:push|pop):.*:(.*)' %{
@@ -51,6 +53,61 @@ try %{ nop %opt{lsp_servers} } catch %{
 try %{ nop %opt{lsp_diagnostic_error_count} } catch %{
     declare-option -hidden int lsp_diagnostic_error_count 0
     declare-option -hidden int lsp_diagnostic_warning_count 0
+}
+
+# LSP result lists in pickers
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# kak-lsp shows symbols, references, diagnostics and other lists through its
+# hidden lsp-show-goto-buffer command; send them to a neokak picker instead.
+
+declare-option -docstring 'show kak-lsp result lists (symbols, references, diagnostics) in pickers' \
+    bool neokak_lsp_pickers true
+declare-option -hidden str neokak_runtime %sh{ dirname "$NEOKAK_SOCK" }
+# Picker title for the next result list (kak-lsp sends references,
+# definitions and implementations all as *goto*).
+declare-option -hidden str neokak_lsp_title
+
+define-command -hidden neokak-lsp -params 2 %{
+    set-option global neokak_lsp_title %arg{1}
+    try %{ evaluate-commands %arg{2} } catch %{
+        set-option global neokak_lsp_title ''
+        fail %val{error}
+    }
+}
+
+define-command -override -hidden lsp-show-goto-buffer -params 4..5 %{
+    evaluate-commands %sh{
+        if [ "$kak_opt_neokak_lsp_pickers" = true ]; then
+            echo 'neokak-lsp-picker %arg{@}'
+        else
+            echo 'neokak-lsp-goto-buffer %arg{@}'
+        fi
+    }
+}
+
+define-command -hidden neokak-lsp-picker -params 4..5 %{
+    # Through a file: results can exceed the size limit of one argument.
+    echo -to-file "%opt{neokak_runtime}/lsp-results" %arg{4}
+    neokak-msg lsp-results %arg{1} %arg{2} %arg{3} "%opt{neokak_runtime}/lsp-results" %opt{neokak_lsp_title}
+    set-option global neokak_lsp_title ''
+}
+
+# kak-lsp's own behavior, for neokak_lsp_pickers=false.
+define-command -hidden neokak-lsp-goto-buffer -params 4..5 %{
+    evaluate-commands -save-regs '"' -try-client %opt[toolsclient] %{
+        edit! -scratch %arg{1}
+        set-option buffer filetype %arg{2}
+        set-option buffer jump_current_line 0
+        set-option buffer lsp_project_root "%arg{3}/"
+        set-register '"' %arg{4}
+        execute-keys Rgg
+    }
+    try %{
+        evaluate-commands -try-client %opt[toolsclient] %{
+            set-option buffer jump_current_line %arg{5}
+            execute-keys %arg{5} g
+        }
+    }
 }
 
 # Hide LSP inlay hints while in insert mode. Kakoune doesn't shift empty
@@ -85,7 +142,7 @@ hook global ModeChange 'pop:insert:.*' %{
     }
 }
 
-set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified}␞%val{cursor_line}␞%val{cursor_char_column}␞%val{buf_line_count}␞%opt{filetype}␞{{mode_info}}␞%opt{lsp_diagnostic_error_count}␞%opt{lsp_diagnostic_warning_count}'
+set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified}␞%val{cursor_line}␞%val{cursor_char_column}␞%val{buf_line_count}␞%opt{filetype}␞{{mode_info}}␞%opt{lsp_diagnostic_error_count}␞%opt{lsp_diagnostic_warning_count}␞{Default}D{StatusLine}S{MenuBackground}M{MenuForeground}F{LineNumbers}L{BufferPadding}P{comment}c{function}f{keyword}k{string}s{type}t{value}v{module}m{Error}E'
 
 # Interface theme
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
@@ -93,7 +150,8 @@ set-option global modelinefmt '%opt{neokak_mode}␞%val{bufname}␞%val{modified
 # Kakoune colorscheme.
 
 declare-option -docstring %{
-    neokak interface theme: gruvbox, gruvbox-light, tokyonight, catppuccin, nord, onedark
+    neokak interface theme: gruvbox, gruvbox-light, tokyonight, catppuccin, nord, onedark,
+    or kakoune to follow the Kakoune colorscheme
 } str neokak_theme gruvbox
 declare-option -docstring 'draw popups on the terminal background instead of the theme color' bool neokak_transparent true
 declare-option -docstring %{
@@ -104,7 +162,7 @@ declare-option -docstring %{
 define-command neokak-theme -params 1 -docstring %{
     neokak-theme <name>: switch the interface theme
 } -shell-script-candidates %{
-    printf '%s\n' gruvbox gruvbox-light tokyonight catppuccin nord onedark
+    printf '%s\n' gruvbox gruvbox-light tokyonight catppuccin nord onedark kakoune
 } %{
     set-option global neokak_theme %arg{1}
 }
@@ -114,12 +172,89 @@ define-command -hidden neokak-sync-theme %{
 }
 hook global GlobalSetOption 'neokak_(theme|transparent|theme_colors)=.*' neokak-sync-theme
 
+# Git
+# ‾‾‾
+# Change markers in the gutter (live, using Kakoune's git tool), hunk
+# navigation, inline blame and a git TUI in a floating terminal.
+
+declare-option -docstring 'show git change markers in the gutter' bool neokak_git_signs true
+declare-option -docstring 'show who last changed the cursor line, after the line' bool neokak_git_blame_line false
+declare-option -docstring 'program <space>gg runs in a floating terminal' str neokak_git_tool lazygit
+declare-option -hidden bool neokak_git_tracked false
+declare-option -hidden int neokak_git_timestamp -1
+
+try %{
+    set-option global git_diff_add_char '▎'
+    set-option global git_diff_mod_char '▎'
+    set-option global git_diff_del_char '▁'
+    set-option global git_diff_top_char '▔'
+}
+
+define-command -hidden neokak-git-check %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_signs" = true ] || exit
+        cd "${kak_buffile%/*}" 2>/dev/null &&
+            git ls-files --error-unmatch -- "$kak_buffile" >/dev/null 2>&1 &&
+            echo 'set-option buffer neokak_git_tracked true'
+    }
+}
+define-command -hidden neokak-git-show %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_tracked" = true ] && [ "$kak_opt_neokak_git_signs" = true ] &&
+            echo 'try %{ git show-diff }'
+    }
+}
+hook global BufOpenFile .* neokak-git-check
+hook global WinDisplay .* neokak-git-show
+
+# Refresh markers after edits (git update-diff diffs the unsaved buffer).
+define-command -hidden neokak-git-update %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_tracked" = true ] && [ "$kak_opt_neokak_git_signs" = true ] &&
+            [ "$kak_timestamp" != "$kak_opt_neokak_git_timestamp" ] &&
+            echo 'try %{ git update-diff }; set-option buffer neokak_git_timestamp %val{timestamp}'
+    }
+}
+hook global BufSetOption neokak_git_tracked=true %{
+    hook -group neokak-git buffer NormalIdle .* neokak-git-update
+    hook -group neokak-git buffer InsertIdle .* neokak-git-update
+    hook -group neokak-git buffer BufWritePost .* neokak-git-update
+    hook -group neokak-git buffer BufReload .* neokak-git-update
+}
+
+hook global GlobalSetOption neokak_git_signs=false %{
+    evaluate-commands -buffer * %{ try %{ remove-highlighter window/git-diff } }
+}
+
+define-command neokak-git-blame-toggle -docstring 'toggle inline blame for the cursor line' %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_blame_line" = true ] && v=false || v=true
+        echo "set-option global neokak_git_blame_line $v"
+    }
+}
+hook global GlobalSetOption neokak_git_blame_line=true %{
+    remove-hooks global neokak-blame
+    hook -group neokak-blame global NormalIdle .* %{
+        neokak-msg blame %val{client} %val{buffile} %val{cursor_line} %val{modified}
+    }
+}
+hook global GlobalSetOption neokak_git_blame_line=false %{
+    remove-hooks global neokak-blame
+    neokak-msg blame-off
+}
+
+define-command neokak-float -params 1.. -docstring %{
+    neokak-float <program> [<args>...]: run a program in a floating terminal until it exits
+} %{
+    neokak-msg float %arg{@}
+}
+
 # Pickers and the plugin API
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 
 define-command neokak-picker -params 1 -docstring %{
     neokak-picker <name>: open a picker
-    Built in: files, grep, buffers, recent, themes, pickers. Plugins add more with
+    Built in: files, grep, buffers, recent, git-status, themes, pickers. Plugins add more with
     neokak-picker-define.
 } %{
     neokak-msg picker %arg{1}
@@ -141,7 +276,8 @@ define-command neokak-explorer -docstring %{
 
 define-command neokak-window -params 1 -docstring %{
     neokak-window <command>: manage split panes
-    vsplit, split, close, only, next, or h/j/k/l to move focus.
+    vsplit, split, close, only, next, equalize, h/j/k/l to move focus,
+    or resize-left/right/up/down.
 } %{
     neokak-msg window %arg{1}
 }
@@ -161,6 +297,8 @@ neokak-picker-define colorschemes 'Colorschemes' "ls '%val{runtime}/colors' '%va
 try %{ declare-user-mode find }
 try %{ declare-user-mode buffer }
 try %{ declare-user-mode window }
+try %{ declare-user-mode search }
+try %{ declare-user-mode git }
 
 map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
 map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
@@ -169,6 +307,8 @@ map global user t       ': neokak-msg terminal<ret>'   -docstring 'terminal (<c-
 map global user f       ': enter-user-mode find<ret>'  -docstring '+find'
 map global user b       ': enter-user-mode buffer<ret>' -docstring '+buffer'
 map global user w       ': enter-user-mode window<ret>' -docstring '+window'
+map global user s       ': enter-user-mode search<ret>' -docstring '+search (LSP)'
+map global user g       ': enter-user-mode git<ret>'    -docstring '+git'
 map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
 map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
 
@@ -195,6 +335,32 @@ map global window l ': neokak-window l<ret>'      -docstring 'focus right'
 map global window w ': neokak-window next<ret>'   -docstring 'next pane'
 map global window q ': neokak-window close<ret>'  -docstring 'close pane'
 map global window o ': neokak-window only<ret>'   -docstring 'close other panes'
+map global window <gt>    ': neokak-window resize-right<ret>' -docstring 'wider'
+map global window <lt>    ': neokak-window resize-left<ret>'  -docstring 'narrower'
+map global window +       ': neokak-window resize-up<ret>'    -docstring 'taller'
+map global window <minus> ': neokak-window resize-down<ret>'  -docstring 'shorter'
+map global window =       ': neokak-window equalize<ret>'     -docstring 'equal sizes'
+
+map global search s ': lsp-document-symbol<ret>'                           -docstring 'document symbols'
+map global search S ': lsp-workspace-symbol '                              -docstring 'workspace symbols (type a query)'
+map global search r ': neokak-lsp References lsp-references<ret>'          -docstring 'references'
+map global search d ': lsp-diagnostics<ret>'                               -docstring 'diagnostics'
+map global search i ': neokak-lsp Implementations lsp-implementation<ret>' -docstring 'implementations'
+map global search t ': neokak-lsp %{Type Definitions} lsp-type-definition<ret>' -docstring 'type definition'
+
+map global git g ': neokak-float %opt{neokak_git_tool}<ret>' -docstring 'git TUI (lazygit)'
+map global git s ': neokak-picker git-status<ret>'           -docstring 'changed files'
+map global git n ': git next-hunk<ret>'                      -docstring 'next change'
+map global git p ': git prev-hunk<ret>'                      -docstring 'previous change'
+map global git b ': neokak-git-blame-toggle<ret>'            -docstring 'toggle line blame'
+map global git B ': git blame<ret>'                          -docstring 'blame the whole file'
+map global git d ': git diff %val{buffile}<ret>'             -docstring 'diff of this file'
+
+# Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
+map global normal <c-right> ': neokak-window resize-right<ret>'
+map global normal <c-left>  ': neokak-window resize-left<ret>'
+map global normal <c-up>    ': neokak-window resize-up<ret>'
+map global normal <c-down>  ': neokak-window resize-down<ret>'
 
 # Plugin manager
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾
@@ -309,3 +475,7 @@ evaluate-commands %sh{
 neokak-sync-current
 neokak-sync-buflist
 neokak-sync-theme
+
+# Files named on the command line were opened before this file was sourced.
+evaluate-commands -buffer * %{ try %{ nop %val{buffile}; neokak-git-check } }
+try neokak-git-show
