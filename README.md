@@ -61,14 +61,35 @@ Windows is not supported.
 
 ## Install
 
+### Prebuilt binary (x86_64 Linux)
+
+Download `neokak-<version>-x86_64-linux.tar.gz` from the
+[releases page](https://github.com/rybiens/neokak/releases). It's statically
+linked, so it runs on any distribution. Put the binary somewhere on your PATH:
+
+```sh
+tar xzf neokak-v0.1.0-x86_64-linux.tar.gz
+install -m 755 neokak-v0.1.0-x86_64-linux/neokak ~/.local/bin/
+```
+
+Each archive has a `.sha256` file next to it for checking the download
+(`sha256sum -c neokak-v0.1.0-x86_64-linux.tar.gz.sha256`). Kakoune itself
+needs to be installed separately.
+
+### From source
+
 ```sh
 git clone https://github.com/rybiens/neokak.git
 cd neokak
-cargo install --path .
+cargo install --locked --path .
 ```
 
-This puts `neokak` in `~/.cargo/bin`. To build without installing, run
-`cargo build --release` and use `./target/release/neokak`.
+This installs to `~/.cargo/bin`. If that isn't on your PATH (common with
+distro-packaged rustup), either add it or install somewhere that is:
+
+```sh
+cargo install --locked --path . --root ~/.local   # installs ~/.local/bin/neokak
+```
 
 ## Usage
 

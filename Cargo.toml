@@ -21,3 +21,7 @@ vt100 = "0.16.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[profile.release]
+strip = true
+lto = "thin"
