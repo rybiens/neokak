@@ -280,3 +280,64 @@ fn lsp_result_lists_open_in_a_picker() {
     nk.wait_text("Diagnostics: nothing found");
     quit(nk, &sandbox);
 }
+
+/// Makes the sandbox project a git repo with everything committed.
+fn git_init(sandbox: &Sandbox) {
+    for args in [&["init", "-q"][..], &["add", "."], &["commit", "-qm", "initial import"]] {
+        let ok = std::process::Command::new("git")
+            .args(["-c", "user.name=Test", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(&sandbox.project)
+            .env("HOME", &sandbox.home)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+}
+
+#[test]
+fn git_markers_blame_and_changed_files() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    git_init(&sandbox);
+    let nk = open_notes(&sandbox);
+
+    // Inline blame on a committed, unmodified line.
+    nk.send(" gb");
+    nk.send("j");
+    nk.wait_text("Test, just now • initial import");
+    nk.send(" gb");
+    nk.wait_for("blame off", |t| !t.contains("initial import"));
+
+    // A live change marker for an unsaved edit.
+    nk.send("ggOadded line");
+    nk.esc();
+    nk.wait_for("change marker", |t| t.lines().any(|l| l.starts_with('▎') && l.contains("added line")));
+
+    // Saved changes show up in the changed-files picker.
+    nk.send(":w\r");
+    nk.send(" gs");
+    nk.wait_for("changed files", |t| t.contains("Changed Files") && t.contains("1/1") && t.contains("notes.txt"));
+    nk.esc();
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn programs_run_in_a_float_until_they_exit() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(":neokak-float sh -c 'echo FLOAT-OK; read line'\r");
+    nk.wait_for("float", |t| t.contains("FLOAT-OK") && t.contains(" sh "));
+    nk.send("\r");
+    nk.wait_for("float closed", |t| !t.contains("FLOAT-OK"));
+
+    nk.send(":neokak-float no-such-program-xyz\r");
+    nk.wait_text("no-such-program-xyz not found");
+    quit(nk, &sandbox);
+}

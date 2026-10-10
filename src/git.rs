@@ -88,6 +88,51 @@ impl GitStatus {
     }
 }
 
+/// One-line blame for `line` of `file` (1-based), gitsigns style:
+/// `author, 3 days ago • summary`. `None` outside a repo or for lines git
+/// doesn't know.
+pub fn blame_line(file: &Path, line: usize) -> Option<String> {
+    let dir = file.parent()?;
+    let range = format!("{line},{line}");
+    let out = git(dir, &["blame", "--porcelain", "-L", &range, "--", &file.to_string_lossy()])?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    format_blame(&out, now)
+}
+
+/// Formats `git blame --porcelain` output for one line.
+pub fn format_blame(porcelain: &str, now: u64) -> Option<String> {
+    let sha = porcelain.split_whitespace().next()?;
+    if sha.chars().all(|c| c == '0') {
+        return Some("You • Uncommitted changes".into());
+    }
+    let field = |name: &str| {
+        porcelain.lines().find_map(|l| l.strip_prefix(name).and_then(|r| r.strip_prefix(' '))).map(str::to_owned)
+    };
+    let author = field("author")?;
+    let time: u64 = field("author-time")?.parse().ok()?;
+    let summary = field("summary").unwrap_or_default();
+    Some(format!("{author}, {} • {summary}", relative_time(now.saturating_sub(time))))
+}
+
+/// "5 minutes ago", "3 days ago", ...
+pub fn relative_time(secs: u64) -> String {
+    const UNITS: [(u64, &str); 6] = [
+        (365 * 86400, "year"),
+        (30 * 86400, "month"),
+        (7 * 86400, "week"),
+        (86400, "day"),
+        (3600, "hour"),
+        (60, "minute"),
+    ];
+    for (size, name) in UNITS {
+        let n = secs / size;
+        if n >= 1 {
+            return format!("{n} {name}{} ago", if n == 1 { "" } else { "s" });
+        }
+    }
+    "just now".into()
+}
+
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git").arg("-C").arg(dir).args(args).stderr(Stdio::null()).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -139,6 +184,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f"), "").unwrap();
         assert_eq!(GitStatus::load(dir.path()).get(&dir.path().join("f")), None);
+    }
+
+    #[test]
+    fn formats_blame() {
+        let porcelain = "4f2a9c1e 12 12 1\nauthor Ada Lovelace\nauthor-mail <ada@x>\nauthor-time 1000000\nsummary Add engine\n\tline";
+        assert_eq!(
+            format_blame(porcelain, 1000000 + 3 * 86400).as_deref(),
+            Some("Ada Lovelace, 3 days ago • Add engine")
+        );
+        let uncommitted = "0000000000000000000000000000000000000000 1 1 1\nauthor Not Committed Yet\n";
+        assert_eq!(format_blame(uncommitted, 0).as_deref(), Some("You • Uncommitted changes"));
+        assert_eq!(format_blame("", 0), None);
+    }
+
+    #[test]
+    fn relative_times() {
+        assert_eq!(relative_time(30), "just now");
+        assert_eq!(relative_time(60), "1 minute ago");
+        assert_eq!(relative_time(7200), "2 hours ago");
+        assert_eq!(relative_time(400 * 86400), "1 year ago");
+    }
+
+    #[test]
+    fn blames_a_committed_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git(&root, &["init", "-q"]);
+        std::fs::write(root.join("f.txt"), "one\ntwo\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "first commit"]);
+        let text = blame_line(&root.join("f.txt"), 2).unwrap();
+        assert!(text.starts_with("t, ") && text.ends_with("• first commit"), "{text}");
+        assert_eq!(blame_line(&root.join("f.txt"), 99), None, "past the end");
     }
 
     #[test]

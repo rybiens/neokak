@@ -14,7 +14,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::{Frame, Terminal};
 
-use crate::event::{AppEvent, Tx};
+use crate::event::{AppEvent, TermSlot, Tx};
 use crate::kak::client::KakClient;
 use crate::kak::session;
 use crate::keys;
@@ -70,6 +70,14 @@ impl Layout {
     }
 }
 
+/// The line `git blame` was asked about, and its result once known.
+struct Blame {
+    client: String,
+    file: String,
+    line: usize,
+    text: Option<String>,
+}
+
 /// A mouse drag in progress that resizes part of the layout.
 enum Dragging {
     Separator(Separator),
@@ -116,6 +124,10 @@ pub struct App {
     input: Option<Input>,
     term: Option<FloatTerm>,
     term_visible: bool,
+    /// A program running in a float until it exits (lazygit, ...).
+    tool: Option<FloatTerm>,
+    /// Inline blame for the focused pane's cursor line.
+    blame: Option<Blame>,
     dashboard: bool,
 
     dirty: bool,
@@ -151,6 +163,8 @@ impl App {
             input: None,
             term: None,
             term_visible: false,
+            tool: None,
+            blame: None,
             dashboard,
             dirty: true,
             quit: false,
@@ -240,14 +254,33 @@ impl App {
             AppEvent::Term(ev) => self.handle_term(ev),
             AppEvent::Ipc(args) => self.handle_ipc(args),
             AppEvent::Wake => {}
-            AppEvent::PtyOutput(bytes) => {
-                if let Some(t) = &mut self.term {
+            AppEvent::PtyOutput(slot, bytes) => {
+                let term = match slot {
+                    TermSlot::Shell => &mut self.term,
+                    TermSlot::Tool => &mut self.tool,
+                };
+                if let Some(t) = term {
                     t.process(&bytes);
                 }
                 // Hidden terminal output doesn't need a frame.
-                self.dirty = self.term_visible;
+                self.dirty = slot == TermSlot::Tool || self.term_visible;
             }
-            AppEvent::PtyExited => {
+            AppEvent::PtyExited(TermSlot::Tool) => {
+                self.tool = None;
+                // The tool may have changed files or git state.
+                if let Some(tree) = &mut self.tree {
+                    tree.refresh();
+                }
+                self.eval("try %{ git update-diff }");
+            }
+            AppEvent::Blame { client, file, line, text } => {
+                if let Some(b) = &mut self.blame
+                    && (b.client.as_str(), b.file.as_str(), b.line) == (client.as_str(), file.as_str(), line)
+                {
+                    b.text = text;
+                }
+            }
+            AppEvent::PtyExited(TermSlot::Shell) => {
                 self.term = None;
                 self.term_visible = false;
             }
@@ -400,6 +433,8 @@ impl App {
                             self.file_op(input);
                         }
                     }
+                } else if let Some(tool) = &mut self.tool {
+                    tool.key(&key);
                 } else if is_term_toggle(&key) {
                     self.toggle_terminal();
                 } else if let (Some(term), true) = (&mut self.term, self.term_visible) {
@@ -415,6 +450,7 @@ impl App {
             }
             Event::Paste(text) => match (&mut self.picker, &mut self.term) {
                 (Some(p), _) => p.paste(&text),
+                _ if self.tool.is_some() => self.tool.as_mut().unwrap().paste(&text),
                 (None, Some(t)) if self.term_visible => t.paste(&text),
                 _ => self.pane_mut().kak.paste(&text),
             },
@@ -425,6 +461,14 @@ impl App {
     }
 
     fn handle_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        if let Some(t) = &mut self.tool {
+            match m.kind {
+                MouseEventKind::ScrollUp => t.scroll(3),
+                MouseEventKind::ScrollDown => t.scroll(-3),
+                _ => {}
+            }
+            return;
+        }
         if let (Some(t), true) = (&mut self.term, self.term_visible) {
             match m.kind {
                 MouseEventKind::ScrollUp => t.scroll(3),
@@ -598,6 +642,30 @@ impl App {
                     self.picker = Some(Picker::list(&title, items, Accept::Location, self.tx.clone()));
                 }
             }
+            "float" => self.run_floating(&args[1..]),
+            "blame" => {
+                let (client, file, line) = (arg(1), arg(2), arg(3).parse().unwrap_or(0));
+                // Line numbers don't match the committed file while there
+                // are unsaved edits.
+                if arg(4) == "true" || line == 0 || !Path::new(file).is_file() {
+                    self.blame = None;
+                    return;
+                }
+                if self
+                    .blame
+                    .as_ref()
+                    .is_some_and(|b| (b.client.as_str(), b.file.as_str(), b.line) == (client, file, line))
+                {
+                    return;
+                }
+                self.blame = Some(Blame { client: client.into(), file: file.into(), line, text: None });
+                let (tx, client, file) = (self.tx.clone(), client.to_owned(), file.to_owned());
+                std::thread::spawn(move || {
+                    let text = crate::git::blame_line(Path::new(&file), line);
+                    let _ = tx.send(AppEvent::Blame { client, file, line, text });
+                });
+            }
+            "blame-off" => self.blame = None,
             "tree" => self.toggle_tree(),
             "terminal" => self.toggle_terminal(),
             "window" => self.window_command(arg(1)),
@@ -650,13 +718,19 @@ impl App {
                 Picker::list("Buffers", bufs, Accept::Buffer, tx)
             }
             "recent" => Picker::list("Recent Files", self.recent.files.clone(), Accept::Edit, tx),
+            "git-status" => Picker::command(
+                "Changed Files",
+                "git ls-files --modified --others --exclude-standard --deduplicate 2>/dev/null",
+                Accept::Edit,
+                tx,
+            ),
             "themes" => {
                 let names = THEMES.iter().map(|s| s.to_string()).collect();
                 Picker::list("Themes", names, Accept::Command("neokak-theme".into()), tx)
             }
             "pickers" => {
                 let mut names: Vec<String> =
-                    ["files", "grep", "buffers", "recent", "themes"].map(String::from).to_vec();
+                    ["files", "grep", "buffers", "recent", "git-status", "themes"].map(String::from).to_vec();
                 names.extend(self.pickers.keys().cloned());
                 Picker::list("Pickers", names, Accept::Picker, tx)
             }
@@ -671,6 +745,23 @@ impl App {
         self.picker = Some(picker);
     }
 
+    /// Runs a program in a floating terminal until it exits.
+    fn run_floating(&mut self, command: &[String]) {
+        let Some(prog) = command.first().filter(|p| !p.is_empty()) else { return };
+        if self.tool.is_some() {
+            return self.notify("warn", "a floating program is already running");
+        }
+        if !on_path(prog) {
+            return self.notify("error", &format!("{prog} not found"));
+        }
+        let inner = FloatTerm::area(self.screen);
+        let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
+        match FloatTerm::spawn(rows, cols, Some(command), TermSlot::Tool, self.tx.clone()) {
+            Ok(t) => self.tool = Some(t),
+            Err(e) => self.notify("error", &format!("{prog}: {e}")),
+        }
+    }
+
     fn toggle_terminal(&mut self) {
         if self.term_visible {
             self.term_visible = false;
@@ -679,7 +770,7 @@ impl App {
         if self.term.is_none() {
             let inner = FloatTerm::area(self.screen);
             let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
-            match FloatTerm::spawn(rows, cols, self.tx.clone()) {
+            match FloatTerm::spawn(rows, cols, None, TermSlot::Shell, self.tx.clone()) {
                 Ok(t) => self.term = Some(t),
                 Err(e) => return self.notify("error", &format!("terminal: {e}")),
             }
@@ -898,6 +989,13 @@ impl App {
         if self.dashboard {
             dashboard::render(buf, focus_rect, theme, icons);
         }
+        // Inline blame after the cursor line (gitsigns' current_line_blame).
+        if let Some(Blame { client, line, text: Some(text), .. }) = &self.blame
+            && *client == focused.client
+            && ModeLine::parse(&focused.status.mode_line).is_some_and(|m| m.line == line.to_string() && !m.modified)
+        {
+            focused.editor.render_after_cursor_line(buf, focus_rect, text, theme.float().bg(theme.bg).fg(theme.fg_dim));
+        }
 
         let status = &focused.status;
         let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref() };
@@ -925,6 +1023,9 @@ impl App {
         if let (Some(t), true) = (&mut self.term, self.term_visible) {
             t.render(buf, screen, theme);
         }
+        if let Some(t) = &mut self.tool {
+            t.render(buf, screen, theme);
+        }
         if let Some(input) = &self.input {
             input.render(buf, screen, theme);
         }
@@ -938,6 +1039,14 @@ impl App {
 /// as `<c-4>`).
 fn is_term_toggle(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('\\' | '4'))
+}
+
+/// Whether `prog` can be run (a path, or a name found on PATH).
+fn on_path(prog: &str) -> bool {
+    if prog.contains('/') {
+        return Path::new(prog).is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(prog).is_file()))
 }
 
 fn git_branch() -> Option<String> {

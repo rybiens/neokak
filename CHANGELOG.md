@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Git integration: change markers in the gutter that update as you type
+  (using Kakoune's git tool), `<space>gn`/`<space>gp` to jump between
+  changes, inline blame for the cursor line (`<space>gb`), a changed-files
+  picker (`<space>gs`), whole-file blame and diff, and lazygit in a floating
+  terminal (`<space>gg`, configurable with `neokak_git_tool`).
+- `neokak-float <program>` runs any program in a floating terminal until it
+  exits.
 - LSP pickers: kak-lsp's result lists (document and workspace symbols,
   references, diagnostics, implementations, call hierarchy) open in a
   picker with a preview instead of a buffer. New `<space>s` mappings:

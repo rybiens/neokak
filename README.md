@@ -33,6 +33,9 @@ model, your kakrc and your Kakoune plugins.
   own
 - **LSP pickers**: document symbols, references, diagnostics, implementations
   and other kak-lsp result lists open in a picker with a preview
+- **Git**: live change markers in the gutter, hunk navigation, inline blame
+  for the cursor line, a changed-files picker, and lazygit (or any tool) in a
+  floating terminal
 - **File explorer** (neo-tree style) with git status, plus create, rename and
   delete
 - **Floating terminal** (toggleterm style) that keeps your shell running when
@@ -58,8 +61,10 @@ Windows is not supported.
 - Rust 1.88 or newer, to build
 - Optional:
   - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for live grep
-  - `git` for the branch in the statusline, git status in the explorer, and
-    the plugin manager
+  - `git` for the branch in the statusline, change markers, blame, git status
+    in the explorer, and the plugin manager
+  - [lazygit](https://github.com/jesseduffield/lazygit) for `<space>gg` (or
+    set `neokak_git_tool` to another program)
   - [kakoune-lsp](https://github.com/kakoune-lsp/kakoune-lsp) (`kak-lsp`) for
     LSP. If your kakrc doesn't load it, neokak loads it when it's installed.
   - A [Nerd Font](https://www.nerdfonts.com) for icons (otherwise run with
@@ -132,6 +137,9 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `neokak_theme`                | `gruvbox` | Interface theme (see [Themes](#themes))        |
 | `neokak_transparent`          | `true`    | Draw popups on the terminal background         |
 | `neokak_theme_colors`         | (empty)   | Per-color theme overrides                      |
+| `neokak_git_signs`            | `true`    | Git change markers in the gutter               |
+| `neokak_git_blame_line`       | `false`   | Show who last changed the cursor line          |
+| `neokak_git_tool`             | `lazygit` | Program `<space>gg` runs                       |
 | `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
 | `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
 
@@ -187,6 +195,11 @@ mapping. All of Kakoune's normal keys work as usual.
 | `<space>ss` / `<space>sS`  | Document symbols / workspace symbols |
 | `<space>sr` / `<space>sd`  | References / diagnostics             |
 | `<space>si` / `<space>st`  | Implementations / type definitions   |
+| `<space>gg`                | lazygit in a floating terminal       |
+| `<space>gs`                | Changed files                        |
+| `<space>gn` / `<space>gp`  | Next / previous change               |
+| `<space>gb` / `<space>gB`  | Toggle line blame / blame whole file |
+| `<space>gd`                | Diff of the current file             |
 | `<space>bn` / `<space>bp`  | Next / previous buffer               |
 | `<space>bd` / `<space>bD`  | Delete buffer / delete without saving |
 | `<space>e`                 | File explorer: open, focus, or close if focused |
@@ -255,6 +268,9 @@ neokak-notify [<level>] <message>
 
 # Switch the interface theme.
 neokak-theme <name>
+
+# Run a program in a floating terminal until it exits.
+neokak-float <program> [<args>...]
 
 # Explorer and panes, as used by the default mappings.
 neokak-explorer
@@ -361,7 +377,6 @@ clippy and builds on stable and on the minimum supported Rust (1.88). Its
 ## Roadmap
 
 - Deriving the interface colors from the Kakoune colorscheme automatically
-- Git integration beyond status (hunks, blame)
 
 ## License
 

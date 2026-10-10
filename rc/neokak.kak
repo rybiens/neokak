@@ -169,12 +169,89 @@ define-command -hidden neokak-sync-theme %{
 }
 hook global GlobalSetOption 'neokak_(theme|transparent|theme_colors)=.*' neokak-sync-theme
 
+# Git
+# ‾‾‾
+# Change markers in the gutter (live, using Kakoune's git tool), hunk
+# navigation, inline blame and a git TUI in a floating terminal.
+
+declare-option -docstring 'show git change markers in the gutter' bool neokak_git_signs true
+declare-option -docstring 'show who last changed the cursor line, after the line' bool neokak_git_blame_line false
+declare-option -docstring 'program <space>gg runs in a floating terminal' str neokak_git_tool lazygit
+declare-option -hidden bool neokak_git_tracked false
+declare-option -hidden int neokak_git_timestamp -1
+
+try %{
+    set-option global git_diff_add_char '▎'
+    set-option global git_diff_mod_char '▎'
+    set-option global git_diff_del_char '▁'
+    set-option global git_diff_top_char '▔'
+}
+
+define-command -hidden neokak-git-check %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_signs" = true ] || exit
+        cd "${kak_buffile%/*}" 2>/dev/null &&
+            git ls-files --error-unmatch -- "$kak_buffile" >/dev/null 2>&1 &&
+            echo 'set-option buffer neokak_git_tracked true'
+    }
+}
+define-command -hidden neokak-git-show %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_tracked" = true ] && [ "$kak_opt_neokak_git_signs" = true ] &&
+            echo 'try %{ git show-diff }'
+    }
+}
+hook global BufOpenFile .* neokak-git-check
+hook global WinDisplay .* neokak-git-show
+
+# Refresh markers after edits (git update-diff diffs the unsaved buffer).
+define-command -hidden neokak-git-update %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_tracked" = true ] && [ "$kak_opt_neokak_git_signs" = true ] &&
+            [ "$kak_timestamp" != "$kak_opt_neokak_git_timestamp" ] &&
+            echo 'try %{ git update-diff }; set-option buffer neokak_git_timestamp %val{timestamp}'
+    }
+}
+hook global BufSetOption neokak_git_tracked=true %{
+    hook -group neokak-git buffer NormalIdle .* neokak-git-update
+    hook -group neokak-git buffer InsertIdle .* neokak-git-update
+    hook -group neokak-git buffer BufWritePost .* neokak-git-update
+    hook -group neokak-git buffer BufReload .* neokak-git-update
+}
+
+hook global GlobalSetOption neokak_git_signs=false %{
+    evaluate-commands -buffer * %{ try %{ remove-highlighter window/git-diff } }
+}
+
+define-command neokak-git-blame-toggle -docstring 'toggle inline blame for the cursor line' %{
+    evaluate-commands %sh{
+        [ "$kak_opt_neokak_git_blame_line" = true ] && v=false || v=true
+        echo "set-option global neokak_git_blame_line $v"
+    }
+}
+hook global GlobalSetOption neokak_git_blame_line=true %{
+    remove-hooks global neokak-blame
+    hook -group neokak-blame global NormalIdle .* %{
+        neokak-msg blame %val{client} %val{buffile} %val{cursor_line} %val{modified}
+    }
+}
+hook global GlobalSetOption neokak_git_blame_line=false %{
+    remove-hooks global neokak-blame
+    neokak-msg blame-off
+}
+
+define-command neokak-float -params 1.. -docstring %{
+    neokak-float <program> [<args>...]: run a program in a floating terminal until it exits
+} %{
+    neokak-msg float %arg{@}
+}
+
 # Pickers and the plugin API
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 
 define-command neokak-picker -params 1 -docstring %{
     neokak-picker <name>: open a picker
-    Built in: files, grep, buffers, recent, themes, pickers. Plugins add more with
+    Built in: files, grep, buffers, recent, git-status, themes, pickers. Plugins add more with
     neokak-picker-define.
 } %{
     neokak-msg picker %arg{1}
@@ -218,6 +295,7 @@ try %{ declare-user-mode find }
 try %{ declare-user-mode buffer }
 try %{ declare-user-mode window }
 try %{ declare-user-mode search }
+try %{ declare-user-mode git }
 
 map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
 map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
@@ -227,6 +305,7 @@ map global user f       ': enter-user-mode find<ret>'  -docstring '+find'
 map global user b       ': enter-user-mode buffer<ret>' -docstring '+buffer'
 map global user w       ': enter-user-mode window<ret>' -docstring '+window'
 map global user s       ': enter-user-mode search<ret>' -docstring '+search (LSP)'
+map global user g       ': enter-user-mode git<ret>'    -docstring '+git'
 map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
 map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
 
@@ -265,6 +344,14 @@ map global search r ': neokak-lsp References lsp-references<ret>'          -docs
 map global search d ': lsp-diagnostics<ret>'                               -docstring 'diagnostics'
 map global search i ': neokak-lsp Implementations lsp-implementation<ret>' -docstring 'implementations'
 map global search t ': neokak-lsp %{Type Definitions} lsp-type-definition<ret>' -docstring 'type definition'
+
+map global git g ': neokak-float %opt{neokak_git_tool}<ret>' -docstring 'git TUI (lazygit)'
+map global git s ': neokak-picker git-status<ret>'           -docstring 'changed files'
+map global git n ': git next-hunk<ret>'                      -docstring 'next change'
+map global git p ': git prev-hunk<ret>'                      -docstring 'previous change'
+map global git b ': neokak-git-blame-toggle<ret>'            -docstring 'toggle line blame'
+map global git B ': git blame<ret>'                          -docstring 'blame the whole file'
+map global git d ': git diff %val{buffile}<ret>'             -docstring 'diff of this file'
 
 # Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
 map global normal <c-right> ': neokak-window resize-right<ret>'
@@ -385,3 +472,7 @@ evaluate-commands %sh{
 neokak-sync-current
 neokak-sync-buflist
 neokak-sync-theme
+
+# Files named on the command line were opened before this file was sourced.
+evaluate-commands -buffer * %{ try %{ nop %val{buffile}; neokak-git-check } }
+try neokak-git-show
