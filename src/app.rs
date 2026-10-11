@@ -815,6 +815,13 @@ impl App {
             }
             "env-providers" => self.env_providers = Provider::parse_all(&args[1..]),
             "terminal-shell" => self.terminal_shell = arg(1).to_owned(),
+            "buffer-nth" => {
+                let n: usize = arg(1).parse().unwrap_or(0);
+                match n.checked_sub(1).and_then(|i| tabline::numbered(&self.buffers).get(i).map(|b| b.to_string())) {
+                    Some(b) => self.eval(&format!("buffer -- {}", session::quote(&b))),
+                    None => self.notify("info", &format!("No buffer {n}")),
+                }
+            }
             "settings" => self.open_settings(),
             // neokak.kak has loaded: activate the project's environment if
             // neokak wasn't started inside it.

@@ -153,6 +153,49 @@ fn floating_terminal_answers_queries() {
     quit(nk, &sandbox);
 }
 
+#[test]
+fn surround_adds_replaces_and_deletes_pairs() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send("w"); // select "hello "
+    nk.send("H"); // minus the space
+    nk.send(" sa(");
+    nk.wait_text("(hello) from neokak");
+    nk.send(" sr([");
+    nk.wait_text("[hello] from neokak");
+    nk.send(" sd]");
+    nk.wait_text("hello from neokak");
+    nk.send(" sat");
+    nk.wait_text("tag:");
+    nk.send("b\r");
+    nk.wait_text("<b>hello</b> from neokak");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn space_b_number_switches_buffers() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(":edit other.txt\r");
+    nk.wait_for("numbered tabs", |t| {
+        let tabs = t.lines().next().unwrap_or_default();
+        tabs.contains("1 notes.txt") && tabs.contains("2 other.txt") && t.contains("second file")
+    });
+    nk.send(" b1");
+    nk.wait_text("hello from neokak");
+    nk.send(" b2");
+    nk.wait_text("second file");
+    nk.send(" b7");
+    nk.wait_text("No buffer 7");
+    quit(nk, &sandbox);
+}
+
 fn write_config(sandbox: &Sandbox, text: &str) -> std::path::PathBuf {
     let dir = sandbox.home.join(".config/neokak");
     std::fs::create_dir_all(&dir).unwrap();
