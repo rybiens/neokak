@@ -690,16 +690,33 @@ declare-option -hidden str neokak_surround_open
 declare-option -hidden str neokak_surround_close
 declare-option -hidden str neokak_surround_object
 
+# Kakoune names some keys rather than passing the character (<dquote>, <lt>,
+# ...): this shell snippet turns the key in $1 into the character, in $k.
+declare-option -hidden str neokak_surround_char_sh %{
+    case "$1" in
+        '<dquote>') k='"' ;;
+        '<quote>') k="'" ;;
+        '<semicolon>') k=';' ;;
+        '<percent>') k='%' ;;
+        '<plus>') k='+' ;;
+        '<minus>') k='-' ;;
+        '<lt>') k='<' ;;
+        '<gt>') k='>' ;;
+        '<space>') k=' ' ;;
+        *) k=$1 ;;
+    esac
+}
+
 define-command -hidden neokak-surround-pair -params 1 %{
     evaluate-commands %sh{
-        case "$1" in
+        eval "$kak_opt_neokak_surround_char_sh"
+        case "$k" in
             '('|')'|b) o='(' c=')' ;;
             '['|']'|r) o='[' c=']' ;;
             '{'|'}'|B) o='{' c='}' ;;
-            '<lt>'|'<gt>'|a) o='<' c='>' ;;
-            '<space>') o=' ' c=' ' ;;
+            '<'|'>'|a) o='<' c='>' ;;
             '<'?*) echo 'fail no pair for that key'; exit ;;
-            *) o=$1 c=$1 ;;
+            *) o=$k c=$k ;;
         esac
         q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/''/g")"; }
         echo "set-option global neokak_surround_open $(q "$o")"
@@ -709,11 +726,12 @@ define-command -hidden neokak-surround-pair -params 1 %{
 
 define-command -hidden neokak-surround-object -params 1 %{
     evaluate-commands %sh{
-        case "$1" in
+        eval "$kak_opt_neokak_surround_char_sh"
+        case "$k" in
             '('|')'|b) o=b ;;
             '['|']'|r) o=r ;;
             '{'|'}'|B) o=B ;;
-            '<lt>'|'<gt>'|a) o=a ;;
+            '<'|'>'|a) o=a ;;
             '"'|Q) o=Q ;;
             "'"|q) o=q ;;
             '`'|g) o=g ;;
