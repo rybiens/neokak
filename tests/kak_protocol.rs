@@ -115,3 +115,45 @@ fn quitting_ends_the_client() {
         }
     }
 }
+
+#[test]
+fn neokak_kak_loads_without_errors() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let rc = sandbox.home.join("neokak.kak");
+    std::fs::write(&rc, neokak::RC).unwrap();
+    let config = neokak::config::Config::default();
+    let (script, _) = config.kakscript(&neokak::config::Applied::default());
+    let config_kak = sandbox.home.join("config.kak");
+    std::fs::write(&config_kak, script).unwrap();
+    let out = sandbox.home.join("debug.txt");
+    let mut kak = Command::new("kak")
+        .args(["-n", "-ui", "dummy", "-e"])
+        .arg(format!(
+            "try %{{ source '{}' }} catch %{{ echo -debug \"error: %val{{error}}\" }}
+             evaluate-commands -buffer *debug* %{{ write '{}' }}
+             kill",
+            rc.display(),
+            out.display()
+        ))
+        .envs(sandbox.env())
+        .env("NEOKAK_NO_LSP", "1")
+        .env("NEOKAK_BIN", "true")
+        .env("NEOKAK_CONFIG_KAK", &config_kak)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    while kak.try_wait().unwrap().is_none() {
+        if Instant::now() > deadline {
+            let _ = kak.kill();
+            panic!("kak didn't finish loading neokak.kak");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let debug = std::fs::read_to_string(&out).unwrap();
+    let errors: Vec<&str> = debug.lines().filter(|l| l.contains("error")).collect();
+    assert!(errors.is_empty(), "neokak.kak reported errors:\n{debug}");
+}

@@ -302,9 +302,24 @@ Folded lines aren't skipped by cursor movement the way they are in Vim:
 moving into a fold (or jumping into one from a search or a picker) shows its
 lines, and they fold again once the cursor leaves.
 
+### Surround
+
+`<space>s` edits the pairs around selections, like vim-surround:
+
+- `<space>sa` then a pair wraps each selection: `(` or `)` gives `(text)`,
+  likewise `[`, `{`, `<` and quotes. `t` asks for an HTML tag
+  (`div class="x"` gives `<div class="x">text</div>`), and any other
+  character surrounds with itself.
+- `<space>sd` then a pair deletes the pair around each selection.
+- `<space>sr` then the old pair and the new one replaces it: `(` then `[`
+  turns `(text)` into `[text]`.
+
+Kakoune's object letters work too (`b` for parentheses, `r` brackets, `B`
+braces, `a` angle brackets, `Q` `q` `g` for double, single and back quotes).
+
 ### References with context
 
-`<space>sR` lists every reference to the symbol under the cursor together
+`<space>lR` lists every reference to the symbol under the cursor together
 with three lines of code around each, grouped by file, in a `*references*`
 buffer (in ripgrep's `-C` format). `<ret>` on a reference line jumps to it.
 
@@ -426,10 +441,12 @@ mapping. All of Kakoune's normal keys work as usual. Rebind any of these in
 | `<space>zz` / `<space>zc`  | Toggle fold / fold                   |
 | `<space>zo` / `<space>zR`  | Unfold / unfold all                  |
 | `<a-a>f` / `<a-a>t`        | Select function / type (tree-sitter) |
-| `<space>ss` / `<space>sS`  | Document symbols / workspace symbols |
-| `<space>sr` / `<space>sR`  | References / references with context |
-| `<space>sd`                | Diagnostics                          |
-| `<space>si` / `<space>st`  | Implementations / type definitions   |
+| `<space>ls` / `<space>lS`  | Document symbols / workspace symbols |
+| `<space>lr` / `<space>lR`  | References / references with context |
+| `<space>ld`                | Diagnostics                          |
+| `<space>li` / `<space>lt`  | Implementations / type definitions   |
+| `<space>sa` / `<space>sd`  | Surround selections / delete surrounding pair |
+| `<space>sr`                | Replace surrounding pair             |
 | `<space>gg`                | lazygit in a floating terminal       |
 | `<space>gs`                | Changed files                        |
 | `<space>gn` / `<space>gp`  | Next / previous change               |
@@ -439,6 +456,7 @@ mapping. All of Kakoune's normal keys work as usual. Rebind any of these in
 | `<space>qp`                | Switch project                       |
 | `<space>qd`                | Forget this project's session        |
 | `<space>bn` / `<space>bp`  | Next / previous buffer               |
+| `<space>b1` … `<space>b9`  | Buffer 1–9 (the numbers on the bufferline tabs) |
 | `<space>bd` / `<space>bD`  | Delete buffer / delete without saving |
 | `<space>e`                 | File explorer: open, focus, or close if focused |
 | `<space>t`, `<c-\>`        | Toggle the floating terminal         |

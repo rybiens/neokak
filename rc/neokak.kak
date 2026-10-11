@@ -660,13 +660,161 @@ define-command neokak-notify -params 1..2 -docstring %{
 
 neokak-picker-define colorschemes 'Colorschemes' "ls '%val{runtime}/colors' '%val{config}/colors' 2>/dev/null | sed -n 's/\.kak$//p' | sort -u" colorscheme
 
+# Surround
+# ‾‾‾‾‾‾‾‾
+# <space>sa wraps the selections in a pair, <space>sd deletes the pair
+# around them and <space>sr replaces it. Pairs are typed as their opening or
+# closing character ((, [, {, <, quotes) or Kakoune's object letters (b, r,
+# B, a, Q, q, g); t asks for an HTML tag; any other character surrounds with
+# itself.
+
+declare-option -hidden str neokak_surround_from
+declare-option -hidden str neokak_surround_then
+# (Kept out of the command bodies below, whose braces must balance.)
+declare-option -hidden str neokak_surround_help_add '( [ { < " '' ` or any character, t: an HTML tag'
+declare-option -hidden str neokak_surround_help_pair '( [ { < " '' `'
+declare-option -hidden str neokak_surround_help_new '( [ { < " '' ` or any character'
+
+# Runs "<command> <key>" with the next key typed, unless it's <esc>.
+define-command -hidden neokak-surround-on-key -params 1 %{
+    set-option global neokak_surround_then %arg{1}
+    on-key %{
+        info
+        evaluate-commands %sh{
+            [ "$kak_key" = '<esc>' ] || printf '%s %%val{key}\n' "$kak_opt_neokak_surround_then"
+        }
+    }
+}
+
+declare-option -hidden str neokak_surround_open
+declare-option -hidden str neokak_surround_close
+declare-option -hidden str neokak_surround_object
+
+define-command -hidden neokak-surround-pair -params 1 %{
+    evaluate-commands %sh{
+        case "$1" in
+            '('|')'|b) o='(' c=')' ;;
+            '['|']'|r) o='[' c=']' ;;
+            '{'|'}'|B) o='{' c='}' ;;
+            '<lt>'|'<gt>'|a) o='<' c='>' ;;
+            '<space>') o=' ' c=' ' ;;
+            '<'?*) echo 'fail no pair for that key'; exit ;;
+            *) o=$1 c=$1 ;;
+        esac
+        q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/''/g")"; }
+        echo "set-option global neokak_surround_open $(q "$o")"
+        echo "set-option global neokak_surround_close $(q "$c")"
+    }
+}
+
+define-command -hidden neokak-surround-object -params 1 %{
+    evaluate-commands %sh{
+        case "$1" in
+            '('|')'|b) o=b ;;
+            '['|']'|r) o=r ;;
+            '{'|'}'|B) o=B ;;
+            '<lt>'|'<gt>'|a) o=a ;;
+            '"'|Q) o=Q ;;
+            "'"|q) o=q ;;
+            '`'|g) o=g ;;
+            *) echo 'fail no surrounding pair for that key'; exit ;;
+        esac
+        echo "set-option global neokak_surround_object $o"
+    }
+}
+
+define-command -hidden neokak-surround-wrap %{
+    evaluate-commands -save-regs 'oc' %{
+        set-register o %opt{neokak_surround_open}
+        set-register c %opt{neokak_surround_close}
+        execute-keys -draft '"cp'
+        execute-keys -draft '"oP'
+    }
+}
+
+define-command -hidden neokak-surround-add-key -params 1 %{
+    evaluate-commands %sh{
+        if [ "$1" = t ]; then
+            echo "prompt 'tag: ' %{ neokak-surround-tag %val{text} }"
+        else
+            echo 'neokak-surround-pair %arg{1}; neokak-surround-wrap'
+        fi
+    }
+}
+
+define-command -hidden neokak-surround-tag -params 1 %{
+    set-option global neokak_surround_open "<%arg{1}>"
+    evaluate-commands %sh{
+        name=${1%% *}
+        printf "set-option global neokak_surround_close '</%s>'\n" "$(printf %s "$name" | sed "s/'/''/g")"
+    }
+    neokak-surround-wrap
+}
+
+define-command -hidden neokak-surround-delete-key -params 1 %{
+    neokak-surround-object %arg{1}
+    # In a draft, so the selections stay on what was inside the pair.
+    evaluate-commands -draft %{
+        execute-keys "<a-a>%opt{neokak_surround_object}"
+        execute-keys -draft '<a-:>;d'
+        execute-keys -draft '<a-:><a-;>;d'
+    }
+}
+
+define-command -hidden neokak-surround-replace-key -params 2 %{
+    neokak-surround-object %arg{1}
+    neokak-surround-pair %arg{2}
+    evaluate-commands -draft -save-regs 'oc' %{
+        set-register o %opt{neokak_surround_open}
+        set-register c %opt{neokak_surround_close}
+        execute-keys "<a-a>%opt{neokak_surround_object}"
+        execute-keys -draft '<a-:>;"cR'
+        execute-keys -draft '<a-:><a-;>;"oR'
+    }
+}
+
+define-command neokak-surround-add -docstring 'surround the selections with a pair' %{
+    info -title 'Surround with' %opt{neokak_surround_help_add}
+    neokak-surround-on-key neokak-surround-add-key
+}
+
+define-command neokak-surround-delete -docstring 'delete the pair around the selections' %{
+    info -title 'Delete surrounding' %opt{neokak_surround_help_pair}
+    neokak-surround-on-key neokak-surround-delete-key
+}
+
+define-command neokak-surround-replace -docstring 'replace the pair around the selections' %{
+    info -title 'Replace surrounding' %opt{neokak_surround_help_pair}
+    neokak-surround-on-key neokak-surround-replace-from
+}
+
+define-command -hidden neokak-surround-replace-from -params 1 %{
+    set-option global neokak_surround_from %arg{1}
+    info -title 'Replace with' %opt{neokak_surround_help_new}
+    neokak-surround-on-key neokak-surround-replace-to
+}
+
+define-command -hidden neokak-surround-replace-to -params 1 %{
+    neokak-surround-replace-key %opt{neokak_surround_from} %arg{1}
+}
+
+# Buffers by number
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+define-command neokak-buffer-nth -params 1 -docstring %{
+    neokak-buffer-nth <n>: switch to the nth buffer in the bufferline
+} %{
+    neokak-msg buffer-nth %arg{1}
+}
+
 # Leader keys (<space>, Kakoune's user mode)
 # ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 
 try %{ declare-user-mode find }
 try %{ declare-user-mode buffer }
 try %{ declare-user-mode window }
-try %{ declare-user-mode search }
+try %{ declare-user-mode lsp }
+try %{ declare-user-mode surround }
 try %{ declare-user-mode git }
 try %{ declare-user-mode session }
 try %{ declare-user-mode fold }

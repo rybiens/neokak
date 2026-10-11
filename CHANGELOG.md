@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Surround (`<space>s`): add (`sa`), delete (`sd`) and replace (`sr`) the
+  pair around selections: brackets, quotes, HTML tags or any character.
+- `<space>b1` … `<space>b9` switch to a buffer by its number, now shown on the
+  bufferline tabs.
+- The LSP group moved from `<space>s` to `<space>l` (`<space>ls` symbols,
+  `<space>lr` references, `<space>ld` diagnostics, ...).
 - Settings: `~/.config/neokak/config.toml` holds the terminal shell, theme,
   editor, git, session, LSP and project-environment settings, plus leader key
   bindings (`[keys]`). The settings screen (`<space>o`) edits it in place,
@@ -29,7 +35,7 @@
   the indented block; folds open while the cursor is inside them.
 - `<space>j`/`<space>k` jump to the next/previous function, `<space>J`/
   `<space>K` to the next/previous symbol (kak-lsp, or kak-tree-sitter).
-- `<space>sR` shows every reference with the code around it in a
+- `<space>lR` shows every reference with the code around it in a
   `*references*` buffer.
 - Project sessions: the files open in each project directory and the cursor
   in each are saved as you work. Restore them from the dashboard (`s`) or

@@ -20,6 +20,12 @@ pub fn visible<'a>(buffers: &'a [String], current: &str) -> Vec<&'a String> {
     buffers.iter().filter(|b| !b.starts_with('*') || *b == current).collect()
 }
 
+/// The file buffers in bufferline order, numbered from 1 for `<space>b<n>`
+/// (scratch buffers like `*debug*` don't count).
+pub fn numbered(buffers: &[String]) -> Vec<&String> {
+    buffers.iter().filter(|b| !b.starts_with('*')).collect()
+}
+
 /// The buffer shown in the focused pane.
 pub struct Active<'a> {
     pub buffer: &'a str,
@@ -40,12 +46,17 @@ pub fn render(
     let bar = Style::new().fg(theme.fg_dim).bg(theme.bg_bar);
     fill(buf, area, bar);
 
+    let numbers = numbered(buffers);
     let tabs: Vec<(String, &String)> = visible(buffers, current)
         .into_iter()
         .map(|b| {
             let short = b.rsplit('/').next().unwrap_or(b);
             let mark = if b == current && modified { format!(" {}", icons.modified()) } else { "  ".into() };
-            (format!("  {}{short}{mark} ", icons.file(b)), b)
+            let n = match numbers.iter().position(|x| *x == b) {
+                Some(i) if i < 9 => format!("{} ", i + 1),
+                _ => String::new(),
+            };
+            (format!("  {n}{}{short}{mark} ", icons.file(b)), b)
         })
         .collect();
 
@@ -132,6 +143,16 @@ mod tests {
         assert!(hits[0].end <= hits[1].start, "tabs don't overlap");
         let (text, _) = draw(&b, "*debug*", 80);
         assert!(text.contains("*debug*"));
+    }
+
+    #[test]
+    fn tabs_are_numbered_for_space_b() {
+        let b = bufs(&["*debug*", "src/a.rs", "src/b.rs"]);
+        assert_eq!(numbered(&b), ["src/a.rs", "src/b.rs"]);
+        let (text, _) = draw(&b, "src/b.rs", 80);
+        assert!(text.contains("1 a.rs") && text.contains("2 b.rs"), "{text}");
+        let (text, _) = draw(&b, "*debug*", 80);
+        assert!(text.contains("*debug*") && !text.contains("3 "), "scratch buffers get no number: {text}");
     }
 
     #[test]
