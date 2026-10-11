@@ -6,19 +6,22 @@
   git,
   ripgrep,
   perl,
+  file,
 }:
 
 let
   cargoToml = lib.importTOML ./Cargo.toml;
 
   # Tools neokak runs by name (perl for Kakoune's `git update-diff`, which
-  # draws the change markers). They're appended to PATH, so the user's own
+  # draws the change markers; file for Kakoune's filetype detection of files
+  # without an extension). They're appended to PATH, so the user's own
   # versions (e.g. a newer kak) still win.
   runtimeTools = [
     kakoune
     git
     ripgrep
     perl
+    file
   ];
 in
 rustPlatform.buildRustPackage {
