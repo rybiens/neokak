@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Nix flake: `nix run github:rybiens/neokak`, or add it as a flake input to
+  install it with NixOS or Home Manager. The package brings Kakoune, git,
+  ripgrep and perl as fallbacks; `nix develop` gives a development shell.
 - Project environments: starting neokak in a project or switching to one
   loads the project's environment (direnv and devenv out of the box, any
   tool through `neokak_env_providers`) and restarts kak-lsp, the terminal

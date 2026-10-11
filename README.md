@@ -121,6 +121,33 @@ distro-packaged rustup), either add it or install somewhere that is:
 cargo install --locked --path . --root ~/.local   # installs ~/.local/bin/neokak
 ```
 
+### With Nix
+
+The flake's package includes Kakoune, git, ripgrep and perl as fallbacks, so
+it works without installing them separately (versions already on your PATH
+take precedence).
+
+```sh
+nix run github:rybiens/neokak             # try it
+nix profile install github:rybiens/neokak  # install it
+```
+
+In a flake-based NixOS or Home Manager configuration, add the input and its
+package:
+
+```nix
+inputs.neokak = {
+  url = "github:rybiens/neokak";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# then, in a module:
+home.packages = [ inputs.neokak.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+```
+
+`nix develop` gives a shell with the Rust toolchain, Kakoune and ripgrep for
+working on neokak.
+
 ## Usage
 
 ```sh
