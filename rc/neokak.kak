@@ -414,9 +414,13 @@ define-command -hidden neokak-fold-indent %{
 }
 define-command -hidden neokak-fold-indent-file -params 1 %{
     evaluate-commands %sh{
-        range=$(awk -v c="$kak_cursor_line" '
+        # A line of only closing brackets (and maybe ; or ,) ends the block
+        # too. The pattern is built with printf, since a literal closing
+        # brace would unbalance this command block.
+        closer=$(printf '^[ \t]*[])\175]+[;,]?[ \t]*$')
+        range=$(LC_ALL=C awk -v c="$kak_cursor_line" -v closer="$closer" '
             function indent(s) { match(s, /^[ \t]*/); return RLENGTH }
-            { blank[NR] = ($0 ~ /^[ \t]*$/); ind[NR] = indent($0) }
+            { ln[NR] = $0; blank[NR] = ($0 ~ /^[ \t]*$/); ind[NR] = indent($0) }
             END {
                 n = c + 1; while (n <= NR && blank[n]) n++
                 if (n <= NR && !blank[c] && ind[n] > ind[c]) h = c
@@ -426,6 +430,7 @@ define-command -hidden neokak-fold-indent-file -params 1 %{
                 }
                 e = h
                 for (i = h + 1; i <= NR; i++) { if (blank[i]) continue; if (ind[i] <= ind[h]) break; e = i }
+                if (e > h && i <= NR && ind[i] == ind[h] && ln[i] ~ closer) e = i
                 if (e > h) print h, e
             }' "$1")
         rm -f "$1"
@@ -453,6 +458,49 @@ define-command neokak-fold -docstring 'fold the function (tree-sitter) or indent
     set-option window neokak_fold_from %val{selections_desc}
     evaluate-commands %sh{
         if [ -n "$kak_opt_tree_sitter_lang" ]; then echo 'neokak-msg fold-ts'; else echo neokak-fold-indent; fi
+    }
+}
+
+# Folds every outermost indented block in the buffer, as Vim's zM does:
+# the file collapses to its top-level lines.
+define-command neokak-fold-all -docstring 'fold every top-level block in the buffer' %{
+    evaluate-commands %sh{
+        file=$(mktemp "${TMPDIR:-/tmp}/neokak-fold.XXXXXX")
+        echo "evaluate-commands -draft -no-hooks %{ write -force '$file' }"
+        echo "neokak-fold-all-file '$file'"
+    }
+}
+define-command -hidden neokak-fold-all-file -params 1 %{
+    evaluate-commands %sh{
+        closer=$(printf '^[ \t]*[])\175]+[;,]?[ \t]*$')
+        # Ranges in bytes (Kakoune's columns): from the header line's
+        # newline to the end of the block's last line.
+        folds=$(LC_ALL=C awk -v closer="$closer" '
+            function indent(s) { match(s, /^[ \t]*/); return RLENGTH }
+            { ln[NR] = $0; blank[NR] = ($0 ~ /^[ \t]*$/); ind[NR] = indent($0) }
+            END {
+                h = 1
+                while (h < NR) {
+                    if (blank[h]) { h++; continue }
+                    n = h + 1; while (n <= NR && blank[n]) n++
+                    if (n > NR || ind[n] <= ind[h]) { h++; continue }
+                    e = h
+                    for (i = h + 1; i <= NR; i++) { if (blank[i]) continue; if (ind[i] <= ind[h]) break; e = i }
+                    if (i <= NR && ind[i] == ind[h] && ln[i] ~ closer) e = i
+                    printf "%d.%d,%d.%d|%d\n", h, length(ln[h]) + 1, e, length(ln[e]), e - h
+                    h = e + 1
+                }
+            }' "$1")
+        rm -f "$1"
+        if [ -z "$folds" ]; then echo 'fail nothing to fold'; exit; fi
+        printf 'set-option buffer neokak_folds %s' "$kak_timestamp"
+        count=0
+        for f in $folds; do
+            printf " '%s|{NeokakFold} ··· %s lines'" "${f%|*}" "${f#*|}"
+            count=$((count + 1))
+        done
+        if [ "$count" = 1 ]; then w=block; else w=blocks; fi
+        printf '\necho "Folded %s %s"\n' "$count" "$w"
     }
 }
 

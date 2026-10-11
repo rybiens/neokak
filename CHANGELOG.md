@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Fold all (`<space>zM`): folds every top-level block in the file, leaving
+  an outline. Indentation folds now take in the closing bracket line, so a
+  folded block shows as one line.
+- `config.toml` lists every setting you haven't set as a commented-out
+  default under its section, kept up to date when the settings screen saves
+  and filled in when `e` opens the file.
+
 ## v0.2.0
 
 - The statusline is now the bottom row. The empty row below it, kept for

@@ -269,6 +269,7 @@ fn settings_screen_edits_the_file_and_follows_it() {
     nk.send("zsh -l\r");
     let text = common::wait_file(&file, |t| t.contains("shell = \"zsh -l\""));
     assert!(text.starts_with("# my settings"), "comments are kept: {text}");
+    assert!(text.contains("# tabstop = 8") && !text.contains("# shell = "), "defaults listed as comments: {text}");
     nk.wait_text("zsh -l");
     // Edited elsewhere: the screen follows.
     std::fs::write(&file, "[terminal]\nshell = \"fish\"\n").unwrap();
@@ -869,6 +870,32 @@ fn indented_blocks_fold_and_unfold() {
     nk.wait_for("folded again", |t| t.contains("··· 4 lines"));
     nk.send(" zR");
     nk.wait_for("unfolded", |t| t.contains("two = 2") && !t.contains("···"));
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn fold_all_collapses_the_file_to_its_top_level() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    std::fs::write(
+        sandbox.project.join("f.rs"),
+        "use std::io;\n\nstruct A {\n    x: u8,\n}\n\nfn main() {\n    let y = 2;\n    if y > 1 {\n        println!(\"big\");\n    }\n}\n",
+    )
+    .unwrap();
+    let nk = Neokak::spawn(&sandbox, &["--clean", "f.rs"]);
+    nk.wait_for("file", |t| t.contains("let y = 2;") && t.contains("NORMAL"));
+    nk.send(" zM");
+    nk.wait_for("everything folded, closing braces included", |t| {
+        t.contains("struct A { ··· 2 lines")
+            && t.contains("fn main() { ··· 5 lines")
+            && !t.contains("let y = 2;")
+            && !t.lines().any(|l| l.trim() == "}")
+    });
+    nk.wait_text("Folded 2 blocks");
+    nk.send(" zR");
+    nk.wait_for("unfolded", |t| t.contains("let y = 2;") && !t.contains("···"));
     quit(nk, &sandbox);
 }
 

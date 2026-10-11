@@ -356,6 +356,7 @@ const BUILTIN_KEYS: &[Builtin] = &[
     Builtin { mode: "fold", key: "z", keys: ": neokak-fold-toggle<ret>", doc: "toggle fold" },
     Builtin { mode: "fold", key: "c", keys: ": neokak-fold<ret>", doc: "fold" },
     Builtin { mode: "fold", key: "o", keys: ": neokak-unfold<ret>", doc: "unfold" },
+    Builtin { mode: "fold", key: "M", keys: ": neokak-fold-all<ret>", doc: "fold all" },
     Builtin { mode: "fold", key: "R", keys: ": neokak-unfold-all<ret>", doc: "unfold all" },
 ];
 
@@ -420,7 +421,7 @@ impl Config {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = file.with_extension("toml.tmp");
-        std::fs::write(&tmp, self.doc.to_string())?;
+        std::fs::write(&tmp, with_default_comments(&self.doc.to_string()))?;
         std::fs::rename(tmp, file)
     }
 
@@ -648,37 +649,154 @@ pub struct Applied {
 
 /// A commented starter file listing every setting with its default.
 pub fn template() -> String {
-    let mut out = String::from(
+    with_default_comments(
         "# neokak settings. Uncomment a line to change it; neokak applies the file\n\
          # whenever it's saved. <space>o opens the settings screen.\n",
-    );
-    let mut section = "";
-    for s in SETTINGS {
-        if s.section != section {
-            section = s.section;
-            out.push_str(&format!("\n[{section}]\n"));
-        }
-        out.push_str(&format!("# {}\n", s.doc));
-        for (i, line) in format!("{} = {}", s.key, s.default).lines().enumerate() {
-            out.push_str(if i == 0 { "# " } else { "#" });
-            out.push_str(line);
-            out.push('\n');
+    )
+}
+
+/// A setting's description and commented-out default, as lines.
+fn default_block(s: &Setting) -> Vec<String> {
+    let mut lines = vec![format!("# {}", s.doc)];
+    for (i, line) in format!("{} = {}", s.key, s.default).lines().enumerate() {
+        lines.push(if i == 0 { format!("# {line}") } else { format!("#{line}") });
+    }
+    lines
+}
+
+const KEYS_BLOCK: &[&str] = &[
+    "# Leader keys: a key, or a group key and a key (\"gx\" is <space>g x), and the",
+    "# Kakoune command to run. An empty command removes a binding.",
+    "[keys]",
+    "# t = \"neokak-msg terminal\"",
+    "# gx = { command = \"git checkout %val{buffile}\", description = \"discard changes\" }",
+    "# J = \"\"",
+];
+
+/// The table a header line opens (`[theme]` → `theme`).
+fn header_name(line: &str) -> Option<&str> {
+    let t = line.trim();
+    let inner = t.strip_prefix('[').filter(|r| !r.starts_with('['))?;
+    Some(inner[..inner.find(']')?].trim())
+}
+
+/// `text` with every setting the file doesn't set listed as a commented-out
+/// default under its section (headers added as needed), and the defaults of
+/// settings it does set removed. Everything else is kept as written; text
+/// that isn't valid TOML is returned unchanged.
+pub fn with_default_comments(text: &str) -> String {
+    let Ok(config) = Config::parse(text) else { return text.to_owned() };
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+
+    // Defaults for settings that are now set.
+    for s in SETTINGS.iter().filter(|s| config.get(s).is_some()) {
+        let block = default_block(s);
+        if let Some(at) = lines.windows(block.len()).position(|w| w == block.as_slice()) {
+            lines.drain(at..at + block.len());
         }
     }
-    out.push_str(
-        "\n# Leader keys: a key, or a group key and a key (\"gx\" is <space>g x), and the\n\
-         # Kakoune command to run. An empty command removes a binding.\n\
-         [keys]\n\
-         # t = \"neokak-msg terminal\"\n\
-         # gx = { command = \"git checkout %val{buffile}\", description = \"discard changes\" }\n\
-         # J = \"\"\n",
-    );
+
+    let section_range = |lines: &[String], name: &str| -> Option<(usize, usize)> {
+        let start = lines.iter().position(|l| header_name(l) == Some(name))?;
+        let end =
+            lines[start + 1..].iter().position(|l| header_name(l).is_some()).map_or(lines.len(), |i| start + 1 + i);
+        Some((start, end))
+    };
+    let mentioned = |block: &[String], key: &str| {
+        block.iter().any(|l| {
+            let t = l.trim_start().trim_start_matches('#').trim_start();
+            t.strip_prefix(key).is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+    };
+
+    let mut sections: Vec<&str> = SETTINGS.iter().map(|s| s.section).collect();
+    sections.dedup();
+    for section in sections {
+        let missing: Vec<&Setting> = SETTINGS
+            .iter()
+            .filter(|s| s.section == section && config.get(s).is_none())
+            .filter(|s| section_range(&lines, section).is_none_or(|(a, b)| !mentioned(&lines[a + 1..b], s.key)))
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let block: Vec<String> = missing.iter().flat_map(|s| default_block(s)).collect();
+        match section_range(&lines, section) {
+            Some((start, end)) => {
+                let mut at = end;
+                while at > start + 1 && lines[at - 1].trim().is_empty() {
+                    at -= 1;
+                }
+                lines.splice(at..at, block);
+            }
+            None => {
+                if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push(format!("[{section}]"));
+                lines.extend(block);
+            }
+        }
+    }
+    if section_range(&lines, "keys").is_none() {
+        if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.extend(KEYS_BLOCK.iter().map(|l| l.to_string()));
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_comments_fill_in_what_the_file_leaves_out() {
+        let text = "# mine\n[theme]\nname = \"nord\" # pick one\n\n[keys]\nt = \"x\"\n";
+        let out = with_default_comments(text);
+        assert!(out.starts_with("# mine\n[theme]\nname = \"nord\" # pick one\n"), "{out}");
+        // The unset theme settings go under [theme], before [keys].
+        let theme = &out[..out.find("[keys]").unwrap()];
+        assert!(theme.contains("# Draw popups on the terminal background\n# transparent = true\n"), "{out}");
+        assert!(!theme.contains("# name = "), "set settings get no default line");
+        // Missing sections are added, with every setting commented out.
+        assert!(
+            out.contains("[terminal]\n# Shell for the floating terminal (empty: $SHELL)\n# shell = \"\"\n"),
+            "{out}"
+        );
+        assert!(out.contains("# providers = [\n#    '.envrc:"), "multi-line defaults stay commented: {out}");
+        assert_eq!(out.matches("[keys]").count(), 1, "the user's [keys] is kept, not added again");
+        // Still the same settings, and running it again changes nothing.
+        let c = Config::parse(&out).unwrap();
+        assert!(c.problems().is_empty(), "{:?}", c.problems());
+        assert_eq!(c.kakscript(&Applied::default()).1.settings, ["theme.name"]);
+        assert_eq!(with_default_comments(&out), out);
+    }
+
+    #[test]
+    fn setting_a_value_replaces_its_default_comment() {
+        let mut c = Config::parse(&template()).unwrap();
+        let shell = SETTINGS.iter().find(|s| s.path() == "terminal.shell").unwrap();
+        c.set(shell, "fish".into());
+        let out = with_default_comments(&c.doc.to_string());
+        assert!(out.contains("shell = \"fish\""), "{out}");
+        assert!(!out.contains("# shell = \"\""), "{out}");
+        assert!(!out.contains("# Shell for the floating terminal"), "{out}");
+        // Back to the default: the comment returns.
+        let mut c = Config::parse(&out).unwrap();
+        c.reset(shell);
+        let out = with_default_comments(&c.doc.to_string());
+        assert!(out.contains("# shell = \"\"") && !out.contains("shell = \"fish\""), "{out}");
+        assert_eq!(with_default_comments(&out), out);
+    }
+
+    #[test]
+    fn invalid_files_are_left_alone() {
+        assert_eq!(with_default_comments("[theme\n"), "[theme\n");
+    }
 
     #[test]
     fn defaults_parse_and_check() {
