@@ -23,6 +23,8 @@ pub struct Terminal {
     child: Box<dyn Child + Send + Sync>,
     size: (u16, u16),
     title: String,
+    /// The start of a possible query split across reads (see [`scan`]).
+    held: Vec<u8>,
 }
 
 impl Terminal {
@@ -79,6 +81,7 @@ impl Terminal {
             child,
             size: (rows, cols),
             title,
+            held: Vec::new(),
         })
     }
 
@@ -91,8 +94,30 @@ impl Terminal {
         }
     }
 
+    /// Feeds program output to the screen, answering the queries programs
+    /// wait on (fish 4 stalls at startup without a device-attributes reply).
     pub fn process(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
+        let mut buf = std::mem::take(&mut self.held);
+        buf.extend_from_slice(bytes);
+        let (queries, held) = scan(&buf);
+        let mut done = 0;
+        for (end, query) in queries {
+            // Answer with the screen as it is right after the query.
+            self.parser.process(&buf[done..end]);
+            done = end;
+            let reply = match query {
+                Query::PrimaryAttributes => b"\x1b[?62;22c".to_vec(),
+                Query::SecondaryAttributes => b"\x1b[>1;10;0c".to_vec(),
+                Query::Status => b"\x1b[0n".to_vec(),
+                Query::Cursor => {
+                    let (row, col) = self.parser.screen().cursor_position();
+                    format!("\x1b[{};{}R", row + 1, col + 1).into_bytes()
+                }
+            };
+            self.write(&reply);
+        }
+        self.parser.process(&buf[done..held]);
+        self.held = buf[held..].to_vec();
     }
 
     fn write(&mut self, bytes: &[u8]) {
@@ -199,6 +224,49 @@ impl Drop for Terminal {
     }
 }
 
+/// Terminal queries the floating terminal answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Query {
+    /// DA1, `CSI c`: what kind of terminal this is.
+    PrimaryAttributes,
+    /// DA2, `CSI > c`.
+    SecondaryAttributes,
+    /// DSR, `CSI 5 n`: are you OK?
+    Status,
+    /// DSR, `CSI 6 n`: where's the cursor?
+    Cursor,
+}
+
+const QUERIES: [(&[u8], Query); 7] = [
+    (b"\x1b[c", Query::PrimaryAttributes),
+    (b"\x1b[0c", Query::PrimaryAttributes),
+    (b"\x1b[>c", Query::SecondaryAttributes),
+    (b"\x1b[>0c", Query::SecondaryAttributes),
+    (b"\x1b[5n", Query::Status),
+    (b"\x1b[6n", Query::Cursor),
+    (b"\x1b[?6n", Query::Cursor),
+];
+
+/// Finds the queries in `buf`, each with the offset just past it, and where
+/// a query that may continue in the next read starts (`buf.len()` if none).
+fn scan(buf: &[u8]) -> (Vec<(usize, Query)>, usize) {
+    let mut found = Vec::new();
+    let mut i = 0;
+    while let Some(off) = buf[i..].iter().position(|&b| b == 0x1b) {
+        let at = i + off;
+        let rest = &buf[at..];
+        if let Some((seq, q)) = QUERIES.iter().find(|(seq, _)| rest.starts_with(seq)) {
+            found.push((at + seq.len(), *q));
+            i = at + seq.len();
+        } else if QUERIES.iter().any(|(seq, _)| seq.starts_with(rest)) {
+            return (found, at);
+        } else {
+            i = at + 1;
+        }
+    }
+    (found, buf.len())
+}
+
 fn color(c: vt100::Color) -> Color {
     match c {
         vt100::Color::Default => Color::Reset,
@@ -268,6 +336,19 @@ pub fn encode_key(key: &KeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_queries_even_split_across_reads() {
+        let (q, held) = scan(b"hi\x1b[0m\x1b[?u\x1b[0cmore\x1b[6n");
+        assert_eq!(q, [(14, Query::PrimaryAttributes), (22, Query::Cursor)]);
+        assert_eq!(held, 22);
+        let (q, held) = scan(b"text\x1b[");
+        assert!(q.is_empty());
+        assert_eq!(held, 4, "may become a query");
+        let (q, held) = scan(b"text\x1b[31m");
+        assert!(q.is_empty());
+        assert_eq!(held, 9);
+    }
 
     fn enc(code: KeyCode, m: KeyModifiers) -> Vec<u8> {
         encode_key(&KeyEvent::new(code, m), false).unwrap()

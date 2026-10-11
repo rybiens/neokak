@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: fish 4 warned that it "could not read response to Primary Device
+  Attribute query" in the floating terminal. The terminal now answers
+  device-attribute, status and cursor-position queries.
 - Nix flake: `nix run github:rybiens/neokak`, or add it as a flake input to
   install it with NixOS or Home Manager. The package brings Kakoune, git,
   ripgrep and perl as fallbacks; `nix develop` gives a development shell.

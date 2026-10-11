@@ -136,6 +136,23 @@ fn floating_terminal_runs_a_shell() {
     quit(nk, &sandbox);
 }
 
+#[test]
+fn floating_terminal_answers_queries() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(" t");
+    nk.wait_text("Terminal");
+    // A device-attributes query, as fish sends at startup: the reply
+    // arrives as input.
+    nk.send("stty -echo -icanon; printf '\\033[0c'; head -c 9 | od -An -c | tr -d ' '; stty sane\r");
+    nk.wait_text("033[?62;22c");
+    nk.send("\x1c");
+    quit(nk, &sandbox);
+}
+
 /// The statusline's mode pill uses the theme's blue.
 const PILL: (u16, u16) = (Neokak::ROWS - 2, 1);
 
