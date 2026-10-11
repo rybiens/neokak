@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.1
 
 - Fold all (`<space>zM`): folds every top-level block in the file, leaving
   an outline. Indentation folds now take in the closing bracket line, so a

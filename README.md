@@ -117,12 +117,12 @@ Download `neokak-<version>-x86_64-linux.tar.gz` from the
 linked, so it runs on any distribution. Put the binary somewhere on your PATH:
 
 ```sh
-tar xzf neokak-v0.2.0-x86_64-linux.tar.gz
-install -m 755 neokak-v0.2.0-x86_64-linux/neokak ~/.local/bin/
+tar xzf neokak-v0.2.1-x86_64-linux.tar.gz
+install -m 755 neokak-v0.2.1-x86_64-linux/neokak ~/.local/bin/
 ```
 
 Each archive has a `.sha256` file next to it for checking the download
-(`sha256sum -c neokak-v0.2.0-x86_64-linux.tar.gz.sha256`). Kakoune itself
+(`sha256sum -c neokak-v0.2.1-x86_64-linux.tar.gz.sha256`). Kakoune itself
 needs to be installed separately.
 
 ### From source
