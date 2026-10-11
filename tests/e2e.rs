@@ -168,6 +168,17 @@ fn surround_adds_replaces_and_deletes_pairs() {
     nk.wait_text("[hello] from neokak");
     nk.send(" sd]");
     nk.wait_text("hello from neokak");
+    // Quotes reach on-key as <dquote> and <quote>.
+    nk.send(" sa\"");
+    nk.wait_text("\"hello\" from neokak");
+    nk.send(" sr\"'");
+    nk.wait_text("'hello' from neokak");
+    nk.send(" sd'");
+    nk.wait_text("hello from neokak");
+    nk.send(" sa<");
+    nk.wait_text("<hello> from neokak");
+    nk.send(" sd>");
+    nk.wait_text("hello from neokak");
     nk.send(" sat");
     nk.wait_text("tag:");
     nk.send("b\r");
@@ -268,7 +279,7 @@ fn settings_screen_edits_the_file_and_follows_it() {
 }
 
 /// The statusline's mode pill uses the theme's blue.
-const PILL: (u16, u16) = (Neokak::ROWS - 2, 1);
+const PILL: (u16, u16) = (Neokak::ROWS - 1, 1);
 
 #[test]
 fn themes_switch_live() {
@@ -493,7 +504,7 @@ fn kakoune_theme_follows_the_colorscheme() {
 
 /// The statusline row.
 fn status(screen: &str) -> &str {
-    screen.lines().nth(Neokak::ROWS as usize - 2).unwrap_or_default()
+    screen.lines().nth(Neokak::ROWS as usize - 1).unwrap_or_default()
 }
 
 #[test]

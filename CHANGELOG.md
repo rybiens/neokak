@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.2.0
 
+- The statusline is now the bottom row. The empty row below it, kept for
+  Kakoune's messages, is gone: messages float just above the statusline at
+  the bottom right while they're showing.
+- Fixed: surrounding with quotes (`<space>sa"`, `<space>sd'`, ...) and with
+  `;`, `%`, `+` or `-` inserted Kakoune's key names (`<dquote>`) instead of
+  the characters.
 - Surround (`<space>s`): add (`sa`), delete (`sd`) and replace (`sr`) the
   pair around selections: brackets, quotes, HTML tags or any character.
 - `<space>b1` … `<space>b9` switch to a buffer by its number, now shown on the
@@ -13,6 +19,9 @@
   bindings (`[keys]`). The settings screen (`<space>o`) edits it in place,
   keeping comments. Changes apply as soon as the file is saved, from neokak or
   any other editor.
+- Nix package: `file` is on neokak's PATH, so Kakoune detects the filetype
+  of files without an extension (scripts with a shebang, for example).
+- README screenshots.
 - Fixed: fish 4 warned that it "could not read response to Primary Device
   Attribute query" in the floating terminal. The terminal now answers
   device-attribute, status and cursor-position queries.

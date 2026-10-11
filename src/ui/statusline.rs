@@ -4,7 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use super::draw::{Seg, atom_segs, fill, put, put_segs, segs_width};
+use super::draw::{Seg, atom_segs, fill, put_segs, segs_width};
 use super::icons::Icons;
 use super::theme::Theme;
 use crate::kak::rpc::{Face, Line, line_text};
@@ -172,10 +172,19 @@ fn ft_ext(ft: &str) -> &str {
 }
 
 /// The line under the statusline: echo messages and errors.
-pub fn render_messages(buf: &mut Buffer, area: Rect, content: &Line, default_face: &Face) {
-    fill(buf, area, Style::new());
-    let x = put(buf, area.x, area.y, area.right(), " ", Style::new());
-    put_segs(buf, x, area.y, area.right(), &atom_segs(content, default_face, None));
+/// Kakoune's echo messages (errors, `:echo`), in a one-line float at the
+/// bottom right just above the statusline. Nothing is drawn, and no row is
+/// reserved, while there's no message.
+pub fn render_messages(buf: &mut Buffer, status: Rect, content: &Line, default_face: &Face, theme: &Theme) {
+    let text = line_text(content);
+    if text.trim().is_empty() || status.y == 0 {
+        return;
+    }
+    let segs = atom_segs(content, default_face, Some(theme.bg_float));
+    let w = (segs_width(&segs) as u16 + 2).min(status.width.saturating_sub(2));
+    let area = Rect::new(status.right().saturating_sub(w + 1), status.y - 1, w, 1);
+    fill(buf, area, theme.float());
+    put_segs(buf, area.x + 1, area.y, area.right().saturating_sub(1), &segs);
 }
 
 #[cfg(test)]
@@ -185,6 +194,19 @@ mod tests {
 
     fn line(s: &str) -> Line {
         vec![Atom { face: Face::default(), contents: s.into() }]
+    }
+
+    #[test]
+    fn messages_float_above_the_statusline_only_when_there_is_one() {
+        let theme = Theme::default();
+        let status = Rect::new(0, 9, 40, 1);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+        render_messages(&mut buf, status, &line("  "), &Face::default(), &theme);
+        assert_eq!(buf, Buffer::empty(Rect::new(0, 0, 40, 10)), "nothing drawn without a message");
+        render_messages(&mut buf, status, &line("no such file"), &Face::default(), &theme);
+        let row: String = (0..40).map(|x| buf[(x, 8)].symbol().to_owned()).collect();
+        assert!(row.ends_with(" no such file  "), "{row:?}");
+        assert_eq!(buf[(39, 8)].bg, Buffer::empty(Rect::new(0, 0, 1, 1))[(0, 0)].bg, "right margin");
     }
 
     #[test]

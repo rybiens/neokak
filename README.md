@@ -17,6 +17,22 @@ model, your kakrc and your Kakoune plugins.
 > read the code before relying on it for anything important. Bug reports and
 > fixes are welcome.
 
+## Screenshots
+
+The file explorer next to two split panes (neokak's own splits, each a
+Kakoune client on the same session), with the gruvbox theme and Kakoune's
+`gruvbox-dark` colorscheme:
+
+![File explorer and two split panes](docs/screenshots/panes.png)
+
+| Find files with preview (`<space>ff`) | Leader key menu (`<space>`) |
+| --- | --- |
+| ![Telescope-style file picker with a preview](docs/screenshots/picker.png) | ![Which-key style leader menu](docs/screenshots/leader.png) |
+
+The settings screen (`<space>o`), which edits `config.toml`:
+
+![Settings screen](docs/screenshots/settings.png)
+
 ## Features
 
 - **Bufferline** of open buffers (click to switch)
@@ -100,12 +116,12 @@ Download `neokak-<version>-x86_64-linux.tar.gz` from the
 linked, so it runs on any distribution. Put the binary somewhere on your PATH:
 
 ```sh
-tar xzf neokak-v0.1.0-x86_64-linux.tar.gz
-install -m 755 neokak-v0.1.0-x86_64-linux/neokak ~/.local/bin/
+tar xzf neokak-v0.2.0-x86_64-linux.tar.gz
+install -m 755 neokak-v0.2.0-x86_64-linux/neokak ~/.local/bin/
 ```
 
 Each archive has a `.sha256` file next to it for checking the download
-(`sha256sum -c neokak-v0.1.0-x86_64-linux.tar.gz.sha256`). Kakoune itself
+(`sha256sum -c neokak-v0.2.0-x86_64-linux.tar.gz.sha256`). Kakoune itself
 needs to be installed separately.
 
 ### From source
