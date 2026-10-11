@@ -159,7 +159,7 @@ fn run_in(dir: &std::path::Path, opts: Options) -> Result<()> {
     });
 
     let has_files = opts.kak_args.iter().any(|a| !a.starts_with(['-', '+']));
-    let info = app::SessionInfo { name: session, log };
+    let info = app::SessionInfo { name: session, log, dir: dir.to_path_buf() };
     let app = app::App::new(kak, info, tx, Icons { nerd: !opts.ascii }, !has_files);
     let result = app.run(&mut terminal, rx);
     restore_terminal();

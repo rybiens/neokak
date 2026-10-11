@@ -56,6 +56,9 @@ model, your kakrc and your Kakoune plugins.
 - **Project sessions**: the files open in each project (and the cursor in
   each) are saved as you work; restore them, or switch projects, from the
   dashboard or `<space>q`
+- **Project environments**: devenv, direnv, or any tool you configure is
+  activated for the project, so the terminal and language servers get the
+  project's tools
 - **Start dashboard** when opened without files
 - **Notification toasts**
 - **Plugin manager** for Kakoune plugins, plus a small kakscript API for adding
@@ -158,6 +161,7 @@ any of yours on those keys. Remap them in `init.kak` if you want them back.
 | `neokak_git_tool`             | `lazygit` | Program `<space>gg` runs                       |
 | `neokak_session`              | `true`    | Save the open files of each project            |
 | `neokak_session_autorestore`  | `false`   | Restore the session when started without files |
+| `neokak_env_providers`        | direnv, devenv | How to load project environments (see [Project environments](#project-environments)) |
 | `neokak_ts_faces`             | `true`    | Link tree-sitter faces to your colorscheme's   |
 | `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
 | `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
@@ -234,6 +238,50 @@ Opening neokak on specific files (`neokak foo.rs`) also updates the project's
 session, to just those files once you quit. Files that no longer exist are
 skipped when restoring, and temporary copies from outside the project (such
 as sudoedit's) are never saved.
+
+Switching projects closes the files from outside the new project (scratch
+buffers stay). If any of them have unsaved changes, neokak asks first: `y`
+discards the changes, `w` saves them all, any other key stays in the current
+project. It also starts the floating terminal over in the new directory,
+unless something is running in it.
+
+### Project environments
+
+Tools like direnv and devenv activate a project's environment from a shell
+hook when you `cd` into it. neokak does the same when you start it in a
+project or switch to one: it loads the environment, restarts kak-lsp (and
+so the language servers) with it, and starts the floating terminal and
+floats like lazygit with it. neokak skips this when it was started from a
+shell that already has the project's direnv or devenv environment active.
+
+Environments come from *providers*, listed in `neokak_env_providers` as
+`<marker>:<command>`. The first provider whose marker file is in the project
+directory or a parent wins. Its command runs in the project directory and
+prints the environment NUL-separated, the way `env -0` does; printing
+nothing means it doesn't apply, and failing shows its last error line. The
+defaults:
+
+```kak
+set-option global neokak_env_providers \
+    '.envrc:if command -v direnv >/dev/null; then direnv exec . env -0; fi' \
+    'devenv.nix:if command -v devenv >/dev/null; then devenv hook-should-activate >/dev/null && devenv shell -- env -0; fi'
+```
+
+devenv only activates projects you've trusted with `devenv allow`, as its
+shell hook does, and direnv only runs `.envrc` files you've `direnv allow`ed.
+Add other tools the same way:
+
+```kak
+set-option -add global neokak_env_providers \
+    'mise.toml:mise exec -- env -0' \
+    'flake.nix:nix develop --command env -0'
+```
+
+Clear the option to turn this off. Kakoune's own process environment can't
+change once it runs, so commands it runs itself (`:make`, formatters) keep
+neokak's starting environment. In your own `%sh{}` blocks, source
+`$kak_opt_neokak_env` (a script that switches to the project environment)
+to get the project's tools.
 
 ### Themes
 

@@ -55,6 +55,46 @@ try %{ nop %opt{lsp_servers} } catch %{
     }
     try lsp-enable
 }
+# Project environments
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+# When you start neokak in a project or switch to one, neokak loads the
+# project's environment (what a shell hook like direnv's would activate) with
+# the first provider whose marker file is in the project directory or above.
+# A provider command runs in the project directory and prints the
+# environment NUL-separated (`env -0`), or nothing when it doesn't apply.
+# Add your own, e.g. 'mise.toml:mise exec -- env -0' or
+# 'flake.nix:nix develop --command env -0'; clear the option to turn it off.
+declare-option -docstring "<marker>:<command> pairs that load a project's environment" \
+    str-list neokak_env_providers \
+    '.envrc:if command -v direnv >/dev/null; then direnv exec . env -0; fi' \
+    'devenv.nix:if command -v devenv >/dev/null; then devenv hook-should-activate >/dev/null && devenv shell -- env -0; fi'
+define-command -hidden neokak-sync-env-providers %{
+    neokak-msg env-providers %opt{neokak_env_providers}
+}
+hook global GlobalSetOption 'neokak_env_providers=.*' neokak-sync-env-providers
+
+# neokak then calls this with a shell script that switches a shell to the
+# loaded environment. Kakoune's own environment can't change, so kak-lsp is
+# restarted through the script; source it in your own %sh{} blocks with
+# `. "$kak_opt_neokak_env"` where you need the project's tools.
+declare-option -docstring "shell script that switches to the project's devenv/direnv environment" \
+    str neokak_env
+declare-option -hidden str neokak_lsp_cmd
+define-command -hidden neokak-project-env -params 1 %{
+    set-option global neokak_env %arg{1}
+    try %{
+        nop %opt{lsp_cmd}
+        evaluate-commands %sh{
+            [ -n "$kak_opt_neokak_lsp_cmd" ] || echo 'set-option global neokak_lsp_cmd %opt{lsp_cmd}'
+        }
+        evaluate-commands %sh{
+            cmd=". '$(printf %s "$1" | sed "s/'/'\\\\''/g")' && $kak_opt_neokak_lsp_cmd"
+            printf "set-option global lsp_cmd '%s'\n" "$(printf %s "$cmd" | sed "s/'/''/g")"
+        }
+        lsp-if-running lsp-restart
+    }
+}
+
 try %{ nop %opt{lsp_diagnostic_error_count} } catch %{
     declare-option -hidden int lsp_diagnostic_error_count 0
     declare-option -hidden int lsp_diagnostic_warning_count 0
@@ -484,10 +524,85 @@ define-command neokak-session-forget -docstring %{
 } %{
     neokak-msg session-forget
 }
+# Switching projects closes the files from outside the new project, after
+# asking about unsaved changes in them.
+declare-option -hidden str-list neokak_bufs
+declare-option -hidden str neokak_switch_to
+
+# Every buffer's name, file and modified flag, flattened.
+define-command -hidden neokak-collect-bufs %{
+    set-option global neokak_bufs
+    evaluate-commands -buffer * %{
+        set-option -add global neokak_bufs %val{bufname} %val{buffile} %val{modified}
+    }
+}
+
 define-command neokak-session-load -params 1 -docstring %{
     neokak-session-load <dir>: switch to a project directory and restore its session
 } %{
-    neokak-msg session-load %arg{1}
+    set-option global neokak_switch_to %arg{1}
+    neokak-collect-bufs
+    evaluate-commands %sh{
+        dir=${1%/}
+        eval set -- "$kak_quoted_opt_neokak_bufs"
+        unsaved=""
+        while [ $# -ge 3 ]; do
+            name=$1 file=$2 modified=$3; shift 3
+            case "$file" in "$dir"/*|''|[!/]*) continue ;; esac
+            [ "$modified" = true ] && unsaved="$unsaved
+  $name"
+        done
+        if [ -z "$unsaved" ]; then
+            echo neokak-session-switch
+            exit
+        fi
+        text="Unsaved changes in files that switching projects closes:
+$unsaved
+
+y: discard them and switch
+w: save them all and switch
+any other key: stay"
+        printf "info -style modal -title 'Unsaved changes' '%s'\n" "$(printf %s "$text" | sed "s/'/''/g")"
+        echo 'on-key %{ info -style modal; neokak-session-load-key %val{key} }'
+    }
+}
+
+define-command -hidden neokak-session-load-key -params 1 %{
+    evaluate-commands %sh{
+        case "$1" in
+            y) echo neokak-session-switch ;;
+            w) echo 'write-all; neokak-session-switch' ;;
+            *) echo "echo 'Staying in this project'" ;;
+        esac
+    }
+}
+
+define-command -hidden neokak-session-switch %{
+    # Save the project being left with its files still open.
+    neokak-session-sync
+    neokak-msg session-load %opt{neokak_switch_to}
+}
+
+# Run by the frontend after changing directory: close the file buffers from
+# outside <dir>. Session saving pauses meanwhile, so the new project's
+# session never gets a half-closed list.
+declare-option -hidden bool neokak_session_was true
+define-command -hidden neokak-close-outside -params 1 %{
+    neokak-collect-bufs
+    set-option global neokak_session_was %opt{neokak_session}
+    set-option global neokak_session false
+    try %{ evaluate-commands %sh{
+        dir=${1%/}
+        eval set -- "$kak_quoted_opt_neokak_bufs"
+        while [ $# -ge 3 ]; do
+            name=$1 file=$2; shift 3
+            case "$file" in "$dir"/*|''|[!/]*) continue ;; esac
+            printf "delete-buffer! '%s'\n" "$(printf %s "$name" | sed "s/'/''/g")"
+        done
+    } }
+    set-option global neokak_session %opt{neokak_session_was}
+    neokak-sync-buflist
+    neokak-sync-current
 }
 
 # Pickers and the plugin API
@@ -734,8 +849,10 @@ evaluate-commands %sh{
 neokak-sync-current
 neokak-sync-buflist
 neokak-sync-theme
+neokak-sync-env-providers
 
 neokak-msg session-autorestore %opt{neokak_session_autorestore}
+neokak-msg ready
 
 # Files named on the command line were opened before this file was sourced.
 evaluate-commands -buffer * %{ try %{ nop %val{buffile}; neokak-git-check } }

@@ -90,6 +90,11 @@ impl Neokak {
     pub const COLS: u16 = 110;
 
     pub fn spawn(sandbox: &Sandbox, args: &[&str]) -> Self {
+        Self::spawn_with_env(sandbox, args, &[])
+    }
+
+    /// Like [`Neokak::spawn`], with extra environment variables.
+    pub fn spawn_with_env(sandbox: &Sandbox, args: &[&str], env: &[(&str, String)]) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize { rows: Self::ROWS, cols: Self::COLS, pixel_width: 0, pixel_height: 0 })
             .unwrap();
@@ -104,6 +109,9 @@ impl Neokak {
         cmd.env("NEOKAK_ASCII", "1");
         // kak-lsp daemons outlive sessions shorter than their startup.
         cmd.env("NEOKAK_NO_LSP", "1");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
         let child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
 
