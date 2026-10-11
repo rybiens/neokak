@@ -52,14 +52,13 @@ struct Layout {
     /// Area shared by the editor panes.
     main: Rect,
     status: Rect,
-    messages: Rect,
 }
 
 impl Layout {
     fn new(area: Rect, tree_width: Option<u16>) -> Self {
         let h = area.height;
         let row = |y: u16| Rect::new(area.x, area.y + y.min(h.saturating_sub(1)), area.width, 1.min(h));
-        let main = Rect::new(area.x, area.y + 1.min(h), area.width, h.saturating_sub(3));
+        let main = Rect::new(area.x, area.y + 1.min(h), area.width, h.saturating_sub(2));
         // Leave the editor at least half the screen.
         let tw = tree_width.map(|w| w.min(main.width / 2));
         let tree = tw.map(|w| Rect { width: w, ..main });
@@ -68,8 +67,7 @@ impl Layout {
             tabline: row(0),
             tree,
             main: Rect { x: main.x + tw, width: main.width - tw, ..main },
-            status: row(h.saturating_sub(2)),
-            messages: row(h.saturating_sub(1)),
+            status: row(h.saturating_sub(1)),
         }
     }
 }
@@ -1470,8 +1468,9 @@ impl App {
         let ctx = StatusContext { mode_line: &status.mode_line, branch: self.branch.as_deref(), focus };
         statusline::render(buf, layout.status, &ctx, theme, icons);
         let prompt = status.is_prompt();
-        let messages = if prompt { &Vec::new() } else { &status.content };
-        statusline::render_messages(buf, layout.messages, messages, &status.default_face);
+        if !prompt {
+            statusline::render_messages(buf, layout.status, &status.content, &status.default_face, theme);
+        }
 
         let cmd_rect = prompt.then(|| popup::render_cmdline(buf, screen, status, theme, icons));
         let menu_rect =
@@ -1565,13 +1564,13 @@ mod tests {
     fn layout_rows_and_tree_column() {
         let l = Layout::new(Rect::new(0, 0, 100, 30), None);
         assert_eq!(l.tabline, Rect::new(0, 0, 100, 1));
-        assert_eq!(l.main, Rect::new(0, 1, 100, 27));
-        assert_eq!((l.status.y, l.messages.y), (28, 29));
+        assert_eq!(l.main, Rect::new(0, 1, 100, 28));
+        assert_eq!(l.status.y, 29, "the statusline is the bottom row");
         assert!(l.tree.is_none());
 
         let l = Layout::new(Rect::new(0, 0, 100, 30), Some(32));
-        assert_eq!(l.tree, Some(Rect::new(0, 1, 32, 27)));
-        assert_eq!(l.main, Rect::new(32, 1, 68, 27));
+        assert_eq!(l.tree, Some(Rect::new(0, 1, 32, 28)));
+        assert_eq!(l.main, Rect::new(32, 1, 68, 28));
 
         let l = Layout::new(Rect::new(0, 0, 60, 30), Some(40));
         assert_eq!(l.tree.unwrap().width, 30, "the tree never takes more than half");

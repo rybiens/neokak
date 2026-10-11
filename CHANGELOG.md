@@ -2,6 +2,12 @@
 
 ## v0.2.0
 
+- The statusline is now the bottom row. The empty row below it, kept for
+  Kakoune's messages, is gone: messages float just above the statusline at
+  the bottom right while they're showing.
+- Fixed: surrounding with quotes (`<space>sa"`, `<space>sd'`, ...) and with
+  `;`, `%`, `+` or `-` inserted Kakoune's key names (`<dquote>`) instead of
+  the characters.
 - Surround (`<space>s`): add (`sa`), delete (`sd`) and replace (`sr`) the
   pair around selections: brackets, quotes, HTML tags or any character.
 - `<space>b1` … `<space>b9` switch to a buffer by its number, now shown on the
