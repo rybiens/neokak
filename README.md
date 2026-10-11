@@ -61,6 +61,8 @@ model, your kakrc and your Kakoune plugins.
   project's tools
 - **Start dashboard** when opened without files
 - **Notification toasts**
+- **Settings**: a TOML config file and an in-app settings screen that edit
+  the same settings and key bindings, applied live
 - **Plugin manager** for Kakoune plugins, plus a small kakscript API for adding
   pickers and notifications
 
@@ -166,34 +168,96 @@ that file at line 42.
 
 ## Configuration
 
-neokak loads your configuration in this order:
+The easy way is `~/.config/neokak/config.toml`, edited on the settings screen
+(`<space>o`) or in any editor. neokak applies the file as soon as it's saved,
+and the screen and the file stay in sync: changes made on the screen are
+written to the file (keeping your comments), and the screen updates when the
+file changes. On the screen, `<ret>` changes the selected entry, `←`/`→` cycle
+through choices, `r` resets it to the default, `d` removes a key binding and
+`e` opens the file. If the file doesn't exist yet, `e` creates it with every
+setting listed and commented out.
+
+```toml
+[terminal]
+shell = "fish"          # empty: $SHELL
+
+[theme]
+name = "tokyonight"     # gruvbox, gruvbox-light, tokyonight, catppuccin, nord, onedark, kakoune
+transparent = true
+colors = ["blue=#7aa2f7"]
+
+[editor]
+colorscheme = "tokyonight"
+tabstop = 4
+indentwidth = 4
+
+[git]
+signs = true
+blame_line = false
+tool = "lazygit"
+
+[session]
+save = true
+autorestore = false
+
+[lsp]
+pickers = true
+hide_hints_in_insert = true
+
+[treesitter]
+faces = true
+
+[env]
+providers = ["mise.toml:mise exec -- env -0"]
+
+[keys]
+t = "neokak-msg terminal"                                     # <space>t
+gx = { command = "git checkout %val{buffile}", description = "discard changes" }  # <space>g x
+J = ""                                                        # remove <space>J
+```
+
+`[keys]` binds leader keys to Kakoune commands. A key is either one key
+after the leader (`t`, `<minus>`) or a group key and one key (`gx` is
+`<space>g` then `x`, in the git group). An empty command removes a binding.
+The settings screen lists every binding, built-in or yours.
+
+### Load order
 
 1. Your normal Kakoune config (`~/.config/kak/kakrc` and its autoload), unless
    you pass `--clean`.
-2. neokak's defaults: leader keys, statusline hooks, LSP setup.
-3. `~/.config/neokak/init.kak`, if it exists. Put neokak-specific settings and
-   plugin declarations here. The dashboard's **Config** button opens it.
+2. neokak's defaults: statusline hooks, LSP setup.
+3. `config.toml`: its settings and the leader keys (neokak's built-in keymap
+   with your `[keys]` on top).
+4. `~/.config/neokak/init.kak`, if it exists, for anything `config.toml` can't
+   express: plugin declarations, hooks, your own commands. The dashboard's
+   **Config** button opens it.
 
-Because neokak's defaults load after your kakrc, its `<space>f`, `<space>b`,
-`<space>e`, `<space>t`, `<space>w`, `<space>|` and `<space>-` mappings replace
-any of yours on those keys. Remap them in `init.kak` if you want them back.
+Because neokak's leader keys load after your kakrc, they replace any of your
+user-mode mappings on the same keys; rebind them in `config.toml`. When
+`config.toml` changes, neokak re-applies it, which also wins over
+`init.kak` for the settings and keys in the file.
 
-| Option                        | Default   | Effect                                         |
-| ----------------------------- | --------- | ---------------------------------------------- |
-| `neokak_theme`                | `gruvbox` | Interface theme (see [Themes](#themes))        |
-| `neokak_transparent`          | `true`    | Draw popups on the terminal background         |
-| `neokak_theme_colors`         | (empty)   | Per-color theme overrides                      |
-| `neokak_git_signs`            | `true`    | Git change markers in the gutter               |
-| `neokak_git_blame_line`       | `false`   | Show who last changed the cursor line          |
-| `neokak_git_tool`             | `lazygit` | Program `<space>gg` runs                       |
-| `neokak_session`              | `true`    | Save the open files of each project            |
-| `neokak_session_autorestore`  | `false`   | Restore the session when started without files |
-| `neokak_env_providers`        | direnv, devenv | How to load project environments (see [Project environments](#project-environments)) |
-| `neokak_ts_faces`             | `true`    | Link tree-sitter faces to your colorscheme's   |
-| `neokak_lsp_pickers`          | `true`    | Show kak-lsp result lists in pickers instead of buffers |
-| `neokak_hide_hints_in_insert` | `true`    | Hide LSP inlay hints in insert mode (see [Known issues](#known-issues)) |
+Every setting is a Kakoune option, which `init.kak` can also set with
+`set-option global <option> <value>`:
 
-Set them with `set-option global <option> <value>` in `init.kak`.
+| config.toml                 | Option                        | Default   |
+| --------------------------- | ----------------------------- | --------- |
+| `terminal.shell`            | `neokak_terminal_shell`       | (empty: `$SHELL`) |
+| `theme.name`                | `neokak_theme`                | `gruvbox` (see [Themes](#themes)) |
+| `theme.transparent`         | `neokak_transparent`          | `true`    |
+| `theme.colors`              | `neokak_theme_colors`         | (none)    |
+| `editor.colorscheme`        | (the `colorscheme` command)   | `default` |
+| `editor.tabstop`            | `tabstop`                     | `8`       |
+| `editor.indentwidth`        | `indentwidth`                 | `4`       |
+| `git.signs`                 | `neokak_git_signs`            | `true`    |
+| `git.blame_line`            | `neokak_git_blame_line`       | `false`   |
+| `git.tool`                  | `neokak_git_tool`             | `lazygit` |
+| `session.save`              | `neokak_session`              | `true`    |
+| `session.autorestore`       | `neokak_session_autorestore`  | `false`   |
+| `lsp.pickers`               | `neokak_lsp_pickers`          | `true`    |
+| `lsp.hide_hints_in_insert`  | `neokak_hide_hints_in_insert` | `true` (see [Known issues](#known-issues)) |
+| `treesitter.faces`          | `neokak_ts_faces`             | `true`    |
+| `env.providers`             | `neokak_env_providers`        | direnv, devenv (see [Project environments](#project-environments)) |
 
 | Environment variable | Effect                                                    |
 | -------------------- | --------------------------------------------------------- |
@@ -345,12 +409,14 @@ bad color shows an error notification.
 ## Keys
 
 The leader is `<space>` (Kakoune's user mode). Press it and wait to see every
-mapping. All of Kakoune's normal keys work as usual.
+mapping. All of Kakoune's normal keys work as usual. Rebind any of these in
+`config.toml` (see [Configuration](#configuration)).
 
 | Keys                       | Action                               |
 | -------------------------- | ------------------------------------ |
 | `<space><space>`           | Find files                           |
 | `<space>,`                 | Switch buffer                        |
+| `<space>o`                 | Settings (config.toml)               |
 | `<space>ff` / `<space>fg`  | Find files / live grep               |
 | `<space>fb` / `<space>fr`  | Buffers / recent files               |
 | `<space>fc` / `<space>ft`  | Kakoune colorschemes / neokak themes |
@@ -460,6 +526,9 @@ neokak-unfold-all
 neokak-session-restore
 neokak-session-load <dir>
 neokak-session-forget
+
+# Settings screen.
+neokak-settings
 
 # Explorer and panes, as used by the default mappings.
 neokak-explorer

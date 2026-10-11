@@ -123,12 +123,29 @@ fn run_in(dir: &std::path::Path, opts: Options) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     ipc::listen(&sock, tx.clone())?;
 
+    // config.toml, as a kakscript neokak.kak sources before init.kak.
+    let config_path = neokak::config::path();
+    let (config, mut config_problems) = match config_path.as_deref().map(neokak::config::Config::load) {
+        Some(Ok(c)) => {
+            let problems = c.problems();
+            (c, problems)
+        }
+        Some(Err(e)) => (neokak::config::Config::default(), vec![e]),
+        None => (neokak::config::Config::default(), Vec::new()),
+    };
+    let (script, applied) = config.kakscript(&neokak::config::Applied::default());
+    let config_kak = dir.join("config.kak");
+    if let Err(e) = std::fs::write(&config_kak, script) {
+        config_problems.push(format!("{}: {e}", config_kak.display()));
+    }
+
     let mut cmd = Command::new("kak");
     cmd.args(["-s", &session, "-ui", "json", "-e"])
         .arg(format!("rename-client {}; source {}", app::MAIN_CLIENT, quote(&rc.display().to_string())))
         .args(&opts.kak_args)
         .env("NEOKAK_BIN", std::env::current_exe()?)
-        .env("NEOKAK_SOCK", &sock);
+        .env("NEOKAK_SOCK", &sock)
+        .env("NEOKAK_CONFIG_KAK", &config_kak);
     if opts.clean {
         let empty = dir.join("config");
         std::fs::create_dir_all(&empty)?;
@@ -160,7 +177,8 @@ fn run_in(dir: &std::path::Path, opts: Options) -> Result<()> {
 
     let has_files = opts.kak_args.iter().any(|a| !a.starts_with(['-', '+']));
     let info = app::SessionInfo { name: session, log, dir: dir.to_path_buf() };
-    let app = app::App::new(kak, info, tx, Icons { nerd: !opts.ascii }, !has_files);
+    let mut app = app::App::new(kak, info, tx, Icons { nerd: !opts.ascii }, !has_files);
+    app.set_config(config_path, config, applied, config_problems);
     let result = app.run(&mut terminal, rx);
     restore_terminal();
     // Terminal's Drop restores the cursor itself and eprintln!s on failure,

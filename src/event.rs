@@ -29,6 +29,8 @@ pub enum AppEvent {
         provider: String,
         env: Result<Option<crate::projenv::Env>, String>,
     },
+    /// config.toml changed on disk.
+    ConfigChanged,
     /// Background work (fuzzy matcher, grep) has new results.
     Wake,
     /// Results of a live-grep run, tagged with the query generation.

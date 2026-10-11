@@ -14,6 +14,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::{Frame, Terminal};
 
+use crate::config::{Applied, Config};
 use crate::event::{AppEvent, TermSlot, Tx};
 use crate::kak::client::KakClient;
 use crate::kak::rpc::KakEvent;
@@ -28,6 +29,7 @@ use crate::ui::icons::Icons;
 use crate::ui::input::{Input, InputResult, Purpose};
 use crate::ui::picker::{Accept, Action, Picker};
 use crate::ui::popup::{self, Toast};
+use crate::ui::settings::{Settings, SettingsAction};
 use crate::ui::statusline::{self, ModeLine, StatusContext};
 use crate::ui::tabline::{self, Hit};
 use crate::ui::terminal::Terminal as FloatTerm;
@@ -165,6 +167,16 @@ pub struct App {
     env: Env,
     /// From the `neokak_env_providers` option.
     env_providers: Vec<Provider>,
+    /// From the `neokak_terminal_shell` option (empty: $SHELL).
+    terminal_shell: String,
+    /// config.toml (see [`crate::config`]).
+    config_path: Option<PathBuf>,
+    config: Config,
+    /// What the last config.kak set, to undo removed entries.
+    config_applied: Applied,
+    /// Problems found while starting, shown once Kakoune is up.
+    config_problems: Vec<String>,
+    settings: Option<Settings>,
     /// A program running in a float until it exits (lazygit, ...).
     tool: Option<FloatTerm>,
     /// The theme options from kak, kept to rebuild the theme when the
@@ -218,6 +230,12 @@ impl App {
             base_env: projenv::current(),
             env: projenv::current(),
             env_providers: Vec::new(),
+            terminal_shell: String::new(),
+            config_path: None,
+            config: Config::default(),
+            config_applied: Applied::default(),
+            config_problems: Vec::new(),
+            settings: None,
             tool: None,
             blame: None,
             theme_settings: ("gruvbox".into(), true, Vec::new()),
@@ -239,6 +257,9 @@ impl App {
     ) -> Result<Shutdown> {
         let size = terminal.size()?;
         self.relayout(Rect::new(0, 0, size.width, size.height));
+        if let Some(path) = self.config_path.clone() {
+            watch_config(path, self.tx.clone());
+        }
         while !self.quit {
             let ev = if self.toasts.is_empty() {
                 Some(rx.recv()?)
@@ -351,6 +372,7 @@ impl App {
             AppEvent::Term(ev) => self.handle_term(ev),
             AppEvent::Ipc(args) => self.handle_ipc(args),
             AppEvent::Wake => {}
+            AppEvent::ConfigChanged => self.reload_config(),
             AppEvent::PtyOutput(slot, bytes) => {
                 let term = match slot {
                     TermSlot::Shell(g) if g == self.term_gen => &mut self.term,
@@ -523,7 +545,10 @@ impl App {
     fn handle_term(&mut self, ev: Event) {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                if let Some(picker) = &mut self.picker {
+                if let Some(settings) = &mut self.settings {
+                    let action = settings.handle_key(&key);
+                    self.settings_action(action);
+                } else if let Some(picker) = &mut self.picker {
                     let action = picker.handle_key(&key);
                     self.picker_action(action);
                 } else if let Some(input) = &mut self.input {
@@ -586,6 +611,9 @@ impl App {
                 MouseEventKind::ScrollDown => t.scroll(-3),
                 _ => {}
             }
+            return;
+        }
+        if self.settings.is_some() {
             return;
         }
         if let Some(p) = &mut self.picker {
@@ -786,9 +814,14 @@ impl App {
                 }
             }
             "env-providers" => self.env_providers = Provider::parse_all(&args[1..]),
+            "terminal-shell" => self.terminal_shell = arg(1).to_owned(),
+            "settings" => self.open_settings(),
             // neokak.kak has loaded: activate the project's environment if
             // neokak wasn't started inside it.
             "ready" => {
+                for problem in std::mem::take(&mut self.config_problems) {
+                    self.notify("warn", &problem);
+                }
                 if let Ok(cwd) = std::env::current_dir() {
                     self.load_project_env(cwd);
                 }
@@ -1078,6 +1111,91 @@ impl App {
         }
     }
 
+    /// Takes over the config read at startup.
+    pub fn set_config(&mut self, path: Option<PathBuf>, config: Config, applied: Applied, problems: Vec<String>) {
+        self.config_path = path;
+        self.config = config;
+        self.config_applied = applied;
+        self.config_problems = problems;
+    }
+
+    fn reload_config(&mut self) {
+        let Some(path) = self.config_path.clone() else { return };
+        match Config::load(&path) {
+            Ok(config) => {
+                let problems = config.problems();
+                if let Some(first) = problems.first() {
+                    let more =
+                        if problems.len() > 1 { format!(" (+{} more)", problems.len() - 1) } else { String::new() };
+                    self.notify("warn", &format!("{first}{more}"));
+                }
+                self.config = config;
+                self.apply_config();
+            }
+            Err(e) => {
+                if let Some(s) = &mut self.settings {
+                    s.message = Some(e.clone());
+                }
+                self.notify("error", &e);
+            }
+        }
+    }
+
+    /// Hands the config to Kakoune.
+    fn apply_config(&mut self) {
+        let (script, applied) = self.config.kakscript(&self.config_applied);
+        let file = self.session.dir.join("config.kak");
+        if let Err(e) = std::fs::write(&file, script) {
+            return self.notify("error", &format!("{}: {e}", file.display()));
+        }
+        self.config_applied = applied;
+        self.eval(&format!("source {}", session::quote(&file.display().to_string())));
+        if let Some(s) = &mut self.settings {
+            s.refresh(&self.config);
+        }
+    }
+
+    fn open_settings(&mut self) {
+        let shown = self.config_path.as_deref().map(tilde).unwrap_or_else(|| "config.toml".into());
+        self.settings = Some(Settings::new(&self.config, &shown));
+    }
+
+    fn settings_action(&mut self, action: SettingsAction) {
+        let Some(path) = self.config_path.clone() else {
+            if action != SettingsAction::None {
+                self.settings = None;
+                self.notify("error", "No config directory (set HOME or XDG_CONFIG_HOME)");
+            }
+            return;
+        };
+        match action {
+            SettingsAction::None => return,
+            SettingsAction::Close => {
+                self.settings = None;
+                return;
+            }
+            SettingsAction::OpenFile => {
+                self.settings = None;
+                if !path.exists() {
+                    let made = path.parent().map_or(Ok(()), std::fs::create_dir_all);
+                    if let Err(e) = made.and_then(|()| std::fs::write(&path, crate::config::template())) {
+                        return self.notify("error", &format!("{}: {e}", path.display()));
+                    }
+                }
+                self.eval(&format!("edit -existing -- {}", session::quote(&path.display().to_string())));
+                return;
+            }
+            SettingsAction::Set(i, v) => self.config.set(&crate::config::SETTINGS[i], v),
+            SettingsAction::Reset(i) => self.config.reset(&crate::config::SETTINGS[i]),
+            SettingsAction::SetKey(spec, cmd) => self.config.set_key(&spec, &cmd),
+            SettingsAction::ResetKey(spec) => self.config.reset_key(&spec),
+        }
+        if let Err(e) = self.config.save(&path) {
+            return self.notify("error", &format!("{}: {e}", path.display()));
+        }
+        self.apply_config();
+    }
+
     fn toggle_terminal(&mut self) {
         if self.term_visible {
             self.term_visible = false;
@@ -1087,8 +1205,13 @@ impl App {
             let inner = FloatTerm::area(self.screen);
             let (rows, cols) = (inner.height.saturating_sub(2).max(1), inner.width.saturating_sub(2).max(1));
             self.term_gen += 1;
-            match FloatTerm::spawn(rows, cols, None, &self.env, TermSlot::Shell(self.term_gen), self.tx.clone()) {
-                Ok(t) => self.term = Some(t),
+            let shell: Vec<String> = self.terminal_shell.split_whitespace().map(String::from).collect();
+            let command = (!shell.is_empty()).then_some(shell.as_slice());
+            match FloatTerm::spawn(rows, cols, command, &self.env, TermSlot::Shell(self.term_gen), self.tx.clone()) {
+                Ok(mut t) => {
+                    t.set_title("Terminal");
+                    self.term = Some(t);
+                }
                 Err(e) => return self.notify("error", &format!("terminal: {e}")),
             }
         }
@@ -1371,7 +1494,28 @@ impl App {
         if let Some(p) = &mut self.picker {
             p.render(buf, screen, theme, icons);
         }
+        if let Some(s) = &mut self.settings {
+            s.render(buf, screen, theme);
+        }
     }
+}
+
+/// Polls config.toml for changes (from neokak or any other editor).
+fn watch_config(path: PathBuf, tx: Tx) {
+    std::thread::spawn(move || {
+        let stamp = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let mut last = stamp(&path);
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let now = stamp(&path);
+            if now != last {
+                last = now;
+                if tx.send(AppEvent::ConfigChanged).is_err() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// `<c-\>` toggles the terminal from anywhere (legacy terminals report it
@@ -1396,6 +1540,14 @@ fn git_branch() -> Option<String> {
         .ok()?;
     let branch = String::from_utf8(out.stdout).ok()?.trim().to_owned();
     (out.status.success() && !branch.is_empty()).then_some(branch)
+}
+
+/// `path` with the home directory shown as `~`.
+fn tilde(path: &Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if path.starts_with(&home) => format!("~/{}", path.strip_prefix(&home).unwrap_or(path).display()),
+        _ => path.display().to_string(),
+    }
 }
 
 #[cfg(test)]

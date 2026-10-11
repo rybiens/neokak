@@ -5,6 +5,7 @@ pub mod icons;
 pub mod input;
 pub mod picker;
 pub mod popup;
+pub mod settings;
 pub mod statusline;
 pub mod tabline;
 pub mod terminal;

@@ -153,6 +153,77 @@ fn floating_terminal_answers_queries() {
     quit(nk, &sandbox);
 }
 
+fn write_config(sandbox: &Sandbox, text: &str) -> std::path::PathBuf {
+    let dir = sandbox.home.join(".config/neokak");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config.toml");
+    std::fs::write(&file, text).unwrap();
+    file
+}
+
+#[test]
+fn config_file_sets_keys_and_reloads_live() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let file = write_config(&sandbox, "[keys]\nX = \"neokak-msg notify info first-binding\"\n");
+    let nk = open_notes(&sandbox);
+    nk.send(" X");
+    nk.wait_text("first-binding");
+    // Saved from anywhere: applied without restarting.
+    std::fs::write(&file, "[keys]\nX = \"neokak-msg notify info second-binding\"\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    nk.send(" X");
+    nk.wait_text("second-binding");
+    // A broken file is reported and the last good config stays.
+    std::fs::write(&file, "[keys\n").unwrap();
+    nk.wait_text("config.toml:");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn config_file_sets_the_terminal_shell() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let shell = sandbox.home.join("myshell");
+    std::fs::write(&shell, "#!/bin/sh\necho custom-shell-started\nexec /bin/sh\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_config(&sandbox, &format!("[terminal]\nshell = \"{}\"\n", shell.display()));
+    let nk = open_notes(&sandbox);
+    nk.send(" t");
+    nk.wait_text("custom-shell-started");
+    nk.send("\x1c");
+    quit(nk, &sandbox);
+}
+
+#[test]
+fn settings_screen_edits_the_file_and_follows_it() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let file = write_config(&sandbox, "# my settings\n");
+    let nk = open_notes(&sandbox);
+    nk.send(" o");
+    nk.wait_for("settings screen", |t| t.contains("Settings") && t.contains("shell"));
+    // The first row is terminal.shell.
+    nk.send("\r");
+    nk.send("zsh -l\r");
+    let text = common::wait_file(&file, |t| t.contains("shell = \"zsh -l\""));
+    assert!(text.starts_with("# my settings"), "comments are kept: {text}");
+    nk.wait_text("zsh -l");
+    // Edited elsewhere: the screen follows.
+    std::fs::write(&file, "[terminal]\nshell = \"fish\"\n").unwrap();
+    nk.wait_for("screen updated", |t| t.contains("fish") && !t.contains("zsh -l"));
+    nk.esc();
+    nk.wait_for("closed", |t| !t.contains("Settings"));
+    quit(nk, &sandbox);
+}
+
 /// The statusline's mode pill uses the theme's blue.
 const PILL: (u16, u16) = (Neokak::ROWS - 2, 1);
 
