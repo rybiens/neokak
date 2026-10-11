@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0
 
 - Surround (`<space>s`): add (`sa`), delete (`sd`) and replace (`sr`) the
   pair around selections: brackets, quotes, HTML tags or any character.
@@ -13,6 +13,9 @@
   bindings (`[keys]`). The settings screen (`<space>o`) edits it in place,
   keeping comments. Changes apply as soon as the file is saved, from neokak or
   any other editor.
+- Nix package: `file` is on neokak's PATH, so Kakoune detects the filetype
+  of files without an extension (scripts with a shebang, for example).
+- README screenshots.
 - Fixed: fish 4 warned that it "could not read response to Primary Device
   Attribute query" in the floating terminal. The terminal now answers
   device-attribute, status and cursor-position queries.
