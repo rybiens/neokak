@@ -212,6 +212,19 @@ define-command neokak-theme -params 1 -docstring %{
     set-option global neokak_theme %arg{1}
 }
 
+# Terminal and settings
+# ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+
+declare-option -docstring 'shell for the floating terminal (empty: $SHELL)' str neokak_terminal_shell
+define-command -hidden neokak-sync-terminal-shell %{
+    neokak-msg terminal-shell %opt{neokak_terminal_shell}
+}
+hook global GlobalSetOption 'neokak_terminal_shell=.*' neokak-sync-terminal-shell
+
+define-command neokak-settings -docstring 'open the settings screen (config.toml)' %{
+    neokak-msg settings
+}
+
 define-command -hidden neokak-sync-theme %{
     neokak-msg theme %opt{neokak_theme} %opt{neokak_transparent} %opt{neokak_theme_colors}
 }
@@ -658,77 +671,11 @@ try %{ declare-user-mode git }
 try %{ declare-user-mode session }
 try %{ declare-user-mode fold }
 
-map global user <space> ': neokak-picker files<ret>'   -docstring 'find files'
-map global user ,       ': neokak-picker buffers<ret>' -docstring 'switch buffer'
-map global user e       ': neokak-explorer<ret>'       -docstring 'file explorer'
-map global user t       ': neokak-msg terminal<ret>'   -docstring 'terminal (<c-\> hides)'
-map global user f       ': enter-user-mode find<ret>'  -docstring '+find'
-map global user b       ': enter-user-mode buffer<ret>' -docstring '+buffer'
-map global user w       ': enter-user-mode window<ret>' -docstring '+window'
-map global user s       ': enter-user-mode search<ret>' -docstring '+search (LSP)'
-map global user g       ': enter-user-mode git<ret>'    -docstring '+git'
-map global user q       ': enter-user-mode session<ret>' -docstring '+session'
-map global user z       ': enter-user-mode fold<ret>'    -docstring '+fold'
-map global user j       ': neokak-goto-symbol next function<ret>'     -docstring 'next function'
-map global user k       ': neokak-goto-symbol previous function<ret>' -docstring 'previous function'
-map global user J       ': neokak-goto-symbol next symbol<ret>'       -docstring 'next symbol'
-map global user K       ': neokak-goto-symbol previous symbol<ret>'   -docstring 'previous symbol'
-map global user |       ': neokak-window vsplit<ret>'  -docstring 'split right'
-map global user <minus> ': neokak-window split<ret>'   -docstring 'split below'
-
-map global find f ': neokak-picker files<ret>'        -docstring 'files'
-map global find g ': neokak-picker grep<ret>'         -docstring 'live grep'
-map global find b ': neokak-picker buffers<ret>'      -docstring 'buffers'
-map global find r ': neokak-picker recent<ret>'       -docstring 'recent files'
-map global find c ': neokak-picker colorschemes<ret>' -docstring 'colorschemes'
-map global find t ': neokak-picker themes<ret>'       -docstring 'interface themes'
-map global find p ': neokak-picker pickers<ret>'      -docstring 'all pickers'
-
-map global buffer b ': neokak-picker buffers<ret>' -docstring 'pick buffer'
-map global buffer n ': buffer-next<ret>'           -docstring 'next buffer'
-map global buffer p ': buffer-previous<ret>'       -docstring 'previous buffer'
-map global buffer d ': delete-buffer<ret>'         -docstring 'delete buffer'
-map global buffer D ': delete-buffer!<ret>'        -docstring 'delete buffer (discard changes)'
-
-map global window v ': neokak-window vsplit<ret>' -docstring 'split right'
-map global window s ': neokak-window split<ret>'  -docstring 'split below'
-map global window h ': neokak-window h<ret>'      -docstring 'focus left'
-map global window j ': neokak-window j<ret>'      -docstring 'focus down'
-map global window k ': neokak-window k<ret>'      -docstring 'focus up'
-map global window l ': neokak-window l<ret>'      -docstring 'focus right'
-map global window w ': neokak-window next<ret>'   -docstring 'next pane'
-map global window q ': neokak-window close<ret>'  -docstring 'close pane'
-map global window o ': neokak-window only<ret>'   -docstring 'close other panes'
-map global window <gt>    ': neokak-window resize-right<ret>' -docstring 'wider'
-map global window <lt>    ': neokak-window resize-left<ret>'  -docstring 'narrower'
-map global window +       ': neokak-window resize-up<ret>'    -docstring 'taller'
-map global window <minus> ': neokak-window resize-down<ret>'  -docstring 'shorter'
-map global window =       ': neokak-window equalize<ret>'     -docstring 'equal sizes'
-
-map global search s ': lsp-document-symbol<ret>'                           -docstring 'document symbols'
-map global search S ': lsp-workspace-symbol '                              -docstring 'workspace symbols (type a query)'
-map global search r ': neokak-lsp References lsp-references<ret>'          -docstring 'references'
-map global search R ': neokak-lsp context:References lsp-references<ret>'  -docstring 'references with context'
-map global search d ': lsp-diagnostics<ret>'                               -docstring 'diagnostics'
-map global search i ': neokak-lsp Implementations lsp-implementation<ret>' -docstring 'implementations'
-map global search t ': neokak-lsp %{Type Definitions} lsp-type-definition<ret>' -docstring 'type definition'
-
-map global git g ': neokak-float %opt{neokak_git_tool}<ret>' -docstring 'git TUI (lazygit)'
-map global git s ': neokak-picker git-status<ret>'           -docstring 'changed files'
-map global git n ': git next-hunk<ret>'                      -docstring 'next change'
-map global git p ': git prev-hunk<ret>'                      -docstring 'previous change'
-map global git b ': neokak-git-blame-toggle<ret>'            -docstring 'toggle line blame'
-map global git B ': git blame<ret>'                          -docstring 'blame the whole file'
-map global git d ': git diff %val{buffile}<ret>'             -docstring 'diff of this file'
-
-map global session s ': neokak-session-restore<ret>'   -docstring 'restore this project'
-map global session p ': neokak-picker projects<ret>'   -docstring 'switch project'
-map global session d ': neokak-session-forget<ret>'    -docstring "forget this project's session"
-
-map global fold z ': neokak-fold-toggle<ret>' -docstring 'toggle fold'
-map global fold c ': neokak-fold<ret>'        -docstring 'fold'
-map global fold o ': neokak-unfold<ret>'      -docstring 'unfold'
-map global fold R ': neokak-unfold-all<ret>'  -docstring 'unfold all'
+# The bindings themselves come from neokak (its built-in keymap plus the
+# [keys] table of config.toml), together with the other config.toml settings.
+evaluate-commands %sh{
+    [ -f "$NEOKAK_CONFIG_KAK" ] && printf "source '%s'\n" "$(printf %s "$NEOKAK_CONFIG_KAK" | sed "s/'/''/g")"
+}
 
 # Ctrl+arrows resize the focused pane (or the explorer), as in LazyVim.
 map global normal <c-right> ': neokak-window resize-right<ret>'
@@ -850,6 +797,7 @@ neokak-sync-current
 neokak-sync-buflist
 neokak-sync-theme
 neokak-sync-env-providers
+neokak-sync-terminal-shell
 
 neokak-msg session-autorestore %opt{neokak_session_autorestore}
 neokak-msg ready

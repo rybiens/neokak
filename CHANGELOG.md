@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Settings: `~/.config/neokak/config.toml` holds the terminal shell, theme,
+  editor, git, session, LSP and project-environment settings, plus leader key
+  bindings (`[keys]`). The settings screen (`<space>o`) edits it in place,
+  keeping comments. Changes apply as soon as the file is saved, from neokak or
+  any other editor.
 - Fixed: fish 4 warned that it "could not read response to Primary Device
   Attribute query" in the floating terminal. The terminal now answers
   device-attribute, status and cursor-position queries.

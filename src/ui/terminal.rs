@@ -85,6 +85,10 @@ impl Terminal {
         })
     }
 
+    pub fn set_title(&mut self, title: &str) {
+        self.title = title.to_owned();
+    }
+
     /// Whether something other than the shell is running in the foreground
     /// (a build, a server, an editor).
     pub fn busy(&self) -> bool {

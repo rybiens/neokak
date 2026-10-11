@@ -4,6 +4,7 @@
 //! a library so the test suite can drive them directly.
 
 pub mod app;
+pub mod config;
 pub mod debug;
 pub mod event;
 pub mod git;
