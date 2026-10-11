@@ -54,7 +54,8 @@ The settings screen (`<space>o`), which edits `config.toml`:
   syntax highlighting in your colorscheme's colors and function/type text
   objects
 - **Folding**: fold the function (tree-sitter) or indented block at the
-  cursor; folded lines open while the cursor is inside them
+  cursor, or the whole file down to its top level; folded lines open while
+  the cursor is inside them
 - **Function and symbol navigation**: jump to the next or previous function
   or symbol
 - **References with context**: every reference with the code around it, in
@@ -190,8 +191,11 @@ and the screen and the file stay in sync: changes made on the screen are
 written to the file (keeping your comments), and the screen updates when the
 file changes. On the screen, `<ret>` changes the selected entry, `←`/`→` cycle
 through choices, `r` resets it to the default, `d` removes a key binding and
-`e` opens the file. If the file doesn't exist yet, `e` creates it with every
-setting listed and commented out.
+`e` opens the file. Settings you haven't set are listed in the file as
+commented-out defaults under their section, with a line describing each:
+`e` creates the file that way, or adds what's missing to an existing one,
+and saving from the screen keeps the list up to date (a setting's comment
+goes away once you set it, and comes back when you reset it).
 
 ```toml
 [terminal]
@@ -311,8 +315,11 @@ Kakoune has no folding of its own, so neokak draws folds itself: a folded
 block collapses into its first line followed by `··· N lines`. `<space>zc`
 folds the function around the cursor when tree-sitter knows the language,
 and otherwise the block indented deeper than the cursor line (or the block
-the cursor is in). `<space>zz` toggles, `<space>zo` opens the fold at the
-cursor and `<space>zR` opens them all.
+the cursor is in). `<space>zM` folds every top-level block in the file, as
+Vim's `zM` does, leaving an outline of the file. `<space>zz` toggles,
+`<space>zo` opens the fold at the cursor and `<space>zR` opens them all.
+Indentation folds take in a closing line of brackets (`}`, `)`, `];`), so a
+folded block shows as one line.
 
 Folded lines aren't skipped by cursor movement the way they are in Vim:
 moving into a fold (or jumping into one from a search or a picker) shows its
@@ -456,6 +463,7 @@ mapping. All of Kakoune's normal keys work as usual. Rebind any of these in
 | `<space>J` / `<space>K`    | Next / previous symbol               |
 | `<space>zz` / `<space>zc`  | Toggle fold / fold                   |
 | `<space>zo` / `<space>zR`  | Unfold / unfold all                  |
+| `<space>zM`                | Fold all (top-level blocks)          |
 | `<a-a>f` / `<a-a>t`        | Select function / type (tree-sitter) |
 | `<space>ls` / `<space>lS`  | Document symbols / workspace symbols |
 | `<space>lr` / `<space>lR`  | References / references with context |

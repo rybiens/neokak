@@ -1181,9 +1181,15 @@ impl App {
             }
             SettingsAction::OpenFile => {
                 self.settings = None;
-                if !path.exists() {
+                // A new file starts from the commented template; an existing
+                // one gets the defaults it doesn't mention as comments.
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(old) => Some(crate::config::with_default_comments(&old)).filter(|new| *new != old),
+                    Err(_) => Some(crate::config::template()),
+                };
+                if let Some(text) = text {
                     let made = path.parent().map_or(Ok(()), std::fs::create_dir_all);
-                    if let Err(e) = made.and_then(|()| std::fs::write(&path, crate::config::template())) {
+                    if let Err(e) = made.and_then(|()| std::fs::write(&path, text)) {
                         return self.notify("error", &format!("{}: {e}", path.display()));
                     }
                 }
