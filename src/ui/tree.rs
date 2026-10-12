@@ -116,6 +116,11 @@ impl Tree {
         }
     }
 
+    /// Marks `file` as the current buffer, leaving the selection alone.
+    pub fn mark_current(&mut self, file: &Path) {
+        self.current = Some(file.to_path_buf());
+    }
+
     /// Marks `file` as the current buffer and expands its parents.
     pub fn reveal(&mut self, file: &Path) {
         self.current = Some(file.to_path_buf());
@@ -248,7 +253,17 @@ impl Tree {
         let x = put(buf, area.x + 1, area.y, max_x, icons.folder(true), header);
         put(buf, x, area.y, max_x, &root_name, header);
 
-        let rows = (area.height - 1) as usize;
+        // While focused, the bottom row lists the file keys.
+        let hints = focused && area.height >= 6;
+        let rows = (area.height - if hints { 2 } else { 1 }) as usize;
+        if hints {
+            let y = area.bottom() - 1;
+            let mut x = area.x + 1;
+            for (key, what) in [("a", "new"), ("r", "rename"), ("d", "delete")] {
+                x = put(buf, x, y, max_x, key, Style::new().fg(theme.orange).bg(theme.bg));
+                x = put(buf, x + 1, y, max_x, what, Style::new().fg(theme.fg_dim).bg(theme.bg)) + 2;
+            }
+        }
         if self.selected < self.scroll {
             self.scroll = self.selected;
         } else if self.selected >= self.scroll + rows {
@@ -382,5 +397,17 @@ mod tests {
         let root = dir.path().file_name().unwrap().to_str().unwrap();
         assert!(text.contains(root), "{text}");
         assert!(text.contains("> docs") && text.contains("A.md"), "{text}");
+    }
+
+    #[test]
+    fn focused_explorer_lists_the_file_keys() {
+        let (_dir, mut t) = fixture();
+        let area = Rect::new(0, 0, 30, 8);
+        let mut buf = Buffer::empty(area);
+        t.render(&mut buf, area, true, &Theme::default(), &Icons { nerd: false });
+        assert!(rows(&buf)[7].contains("a new  r rename  d delete"), "{:?}", rows(&buf));
+        let mut buf = Buffer::empty(area);
+        t.render(&mut buf, area, false, &Theme::default(), &Icons { nerd: false });
+        assert!(!rows(&buf).join("\n").contains("rename"), "only while focused");
     }
 }

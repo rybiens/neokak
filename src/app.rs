@@ -739,8 +739,11 @@ impl App {
                 self.branch = git_branch();
                 let file = PathBuf::from(arg(3));
                 if file.is_absolute() {
-                    if let Some(tree) = &mut self.tree {
-                        tree.reveal(&file);
+                    // Follow the buffer, unless you're working in the explorer.
+                    match &mut self.tree {
+                        Some(tree) if self.tree_focused => tree.mark_current(&file),
+                        Some(tree) => tree.reveal(&file),
+                        None => {}
                     }
                     self.current_file = Some(file);
                 }
@@ -751,7 +754,13 @@ impl App {
                 }
             }
             "buflist" => self.buffers = args[1..].to_vec(),
-            "bufclose" => self.buffers.retain(|b| b != arg(1)),
+            "bufclose" => {
+                // The name can come as the full path (a buffer renamed to an
+                // absolute path), while the list holds it relative to cwd.
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let closed = cwd.join(arg(1));
+                self.buffers.retain(|b| b != arg(1) && cwd.join(b) != closed);
+            }
             "picker" => self.open_picker(arg(1)),
             "picker-define" => {
                 let def = PickerDef { title: arg(2).to_owned(), source: arg(3).to_owned(), accept: arg(4).to_owned() };
@@ -1337,28 +1346,36 @@ impl App {
                 let to = root.join(input.text.trim());
                 let r = to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::rename(from, &to));
                 if r.is_ok() {
-                    // Point open buffers at the new location.
+                    // Point open buffers at the new location. One script, so
+                    // the buffer list is synced after the renames (separate
+                    // evals can arrive in any order).
                     let cwd = std::env::current_dir().unwrap_or_default();
-                    for b in self.buffers_under(from) {
-                        let rel = cwd.join(&b).strip_prefix(from).map(Path::to_path_buf).unwrap_or_default();
-                        let new = if rel.as_os_str().is_empty() { to.clone() } else { to.join(rel) };
-                        self.eval(&format!(
-                            "try %{{ evaluate-commands -buffer {} %{{ rename-buffer -file {} }} }}",
-                            session::quote(&b),
-                            q(&new)
-                        ));
-                    }
+                    let mut script: Vec<String> = self
+                        .buffers_under(from)
+                        .into_iter()
+                        .map(|b| {
+                            let rel = cwd.join(&b).strip_prefix(from).map(Path::to_path_buf).unwrap_or_default();
+                            let new = if rel.as_os_str().is_empty() { to.clone() } else { to.join(rel) };
+                            format!(
+                                "try %{{ evaluate-commands -buffer {} %{{ rename-buffer -file {} }} }}",
+                                session::quote(&b),
+                                q(&new)
+                            )
+                        })
+                        .collect();
                     // Kakoune has no hook for buffer renames.
-                    self.eval("neokak-sync-buflist; neokak-sync-current");
+                    script.push("neokak-sync-buflist; neokak-sync-current".into());
+                    self.eval(&script.join("\n"));
                 }
                 r.map(|_| Some(to))
             }
             Purpose::Delete(path) => {
                 let r = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
-                if r.is_ok() {
-                    for b in self.buffers_under(path) {
-                        self.eval(&format!("try %{{ delete-buffer! {} }}", session::quote(&b)));
-                    }
+                let buffers = self.buffers_under(path);
+                if r.is_ok() && !buffers.is_empty() {
+                    let script: Vec<String> =
+                        buffers.iter().map(|b| format!("try %{{ delete-buffer! {} }}", session::quote(b))).collect();
+                    self.eval(&script.join("\n"));
                 }
                 r.map(|_| None)
             }
