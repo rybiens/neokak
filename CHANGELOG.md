@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- The explorer shows its file keys (`a` new, `r` rename, `d` delete) on its
+  bottom line while it has focus.
+- Fixed: moving a file into another folder from the explorer (`r`) left its
+  buffer under the old name, and deleting a renamed file left its tab open.
+- Fixed: while the explorer had focus, its selection jumped to the editor's
+  current buffer after a rename.
+
 ## v0.2.1
 
 - Fold all (`<space>zM`): folds every top-level block in the file, leaving

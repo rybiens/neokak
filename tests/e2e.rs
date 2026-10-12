@@ -121,6 +121,47 @@ fn explorer_and_splits() {
 }
 
 #[test]
+fn explorer_creates_renames_and_deletes() {
+    if !have_kak() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let nk = open_notes(&sandbox);
+    nk.send(":edit other.txt\r");
+    nk.wait_text("second file");
+    let tabs = |t: &str| t.lines().next().unwrap_or_default().to_owned();
+
+    nk.send(" e");
+    nk.wait_for("explorer", |t| t.contains("File Explorer") && t.contains("other.txt"));
+    // a: a folder (trailing /), then a file in it, which opens.
+    nk.send("a");
+    nk.wait_text("New file in");
+    nk.send("docs/\r");
+    common::wait_file(&sandbox.project, |_| sandbox.project.join("docs").is_dir());
+    nk.send("adocs/new.md\r");
+    nk.wait_for("new file open", |t| tabs(t).contains("new.md"));
+    assert!(sandbox.project.join("docs/new.md").is_file());
+
+    // r: moving an open file into a folder renames its buffer.
+    nk.send(" e");
+    nk.wait_text("File Explorer");
+    nk.send("Gr");
+    nk.wait_text("Rename");
+    nk.send("\x15docs/moved.txt\r");
+    nk.wait_for("buffer follows the file", |t| tabs(t).contains("moved.txt") && !tabs(t).contains("other.txt"));
+    assert!(sandbox.project.join("docs/moved.txt").is_file() && !sandbox.project.join("other.txt").exists());
+
+    // d: deleting it closes its buffer.
+    nk.wait_for("moved file selected", |t| t.contains("moved.txt"));
+    nk.send("d");
+    nk.wait_text("Delete docs/moved.txt?");
+    nk.send("y");
+    nk.wait_for("buffer closed", |t| !tabs(t).contains("moved.txt"));
+    assert!(!sandbox.project.join("docs/moved.txt").exists());
+    quit(nk, &sandbox);
+}
+
+#[test]
 fn floating_terminal_runs_a_shell() {
     if !have_kak() {
         return;
